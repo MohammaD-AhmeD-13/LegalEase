@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Editors
+.vscode/
+.idea/
+
+# Conda
+.conda/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data (legal documents)
+data/raw/
+data/processed/
+*.pdf
+*.docx
+
+# OCR outputs
+*.txt
+*.json
+
+# Models
+models/
+*.bin
+*.pt
+*.ckpt
+*.safetensors
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
