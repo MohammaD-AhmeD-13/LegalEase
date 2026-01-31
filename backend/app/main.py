@@ -1,15 +1,29 @@
+from threading import Thread
+
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from backend.services.llm_service import get_llm_service
+from backend.services.llm_service import get_llm_service, is_llm_ready
 from backend.services.retrieval_service import get_retrieval_service
 
 app = FastAPI(title="LegalEase")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.on_event("startup")
 def load_llm() -> None:
-    get_llm_service()
+    Thread(target=get_llm_service, daemon=True).start()
 
 
 @app.on_event("startup")
@@ -23,13 +37,13 @@ def health_check():
 
 @app.get("/llm/ready")
 def llm_ready():
-    return {"status": "loaded"}
+    return {"status": "loaded" if is_llm_ready() else "loading"}
 
 
 class RagQueryRequest(BaseModel):
     query: str = Field(..., min_length=3)
-    top_k: int = Field(5, ge=1, le=20)
-    max_new_tokens: int = Field(256, ge=32, le=1024)
+    top_k: int = Field(3, ge=1, le=20)
+    max_new_tokens: int = Field(128, ge=32, le=512)
 
 
 @app.post("/rag/build")
