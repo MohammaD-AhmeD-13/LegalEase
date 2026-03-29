@@ -1,5 +1,7 @@
 import json
 import os
+import logging
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -37,12 +39,29 @@ class RetrievalService:
 
     def _load_model(self) -> None:
         if self.model is None:
+            logger = logging.getLogger("uvicorn.error")
+            logger.info("Loading embedding model %s...", self.embedding_model_id)
+            started = time.time()
             self.model = SentenceTransformer(self.embedding_model_id)
+            logger.info("Embedding model loaded in %.1fs.", time.time() - started)
 
     def _load_index(self) -> None:
+        logger = logging.getLogger("uvicorn.error")
+        started = time.time()
         data = np.load(self.index_path)
         self.embeddings = data["embeddings"].astype(np.float32)
         self.metadata = json.loads(self.metadata_path.read_text(encoding="utf-8"))
+        logger.info("RAG index loaded in %.1fs (%s items).", time.time() - started, len(self.metadata))
+
+    def preload(self) -> None:
+        logger = logging.getLogger("uvicorn.error")
+        logger.info("Preloading RAG index and embedding model...")
+        if self.embeddings is None or self.metadata is None:
+            if not (self.index_path.exists() and self.metadata_path.exists()):
+                raise FileNotFoundError("RAG index files not found. Run /rag/build first.")
+            self._load_index()
+        self._load_model()
+        logger.info("RAG preload complete.")
 
     def _format_query(self, query: str) -> str:
         if "e5" in self.embedding_model_id.lower():
@@ -98,7 +117,7 @@ class RetrievalService:
             "index_path": str(self.index_path),
         }
 
-    def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def search(self, query: str, top_k: int = 2) -> List[Dict[str, Any]]:
         if self.embeddings is None or self.metadata is None:
             raise ValueError("RAG index not built yet. Call build_index first.")
 
