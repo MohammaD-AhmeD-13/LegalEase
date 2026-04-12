@@ -1,17 +1,19 @@
+@import url("https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Source+Serif+4:wght@400;500;600&display=swap");
+
 :root {
-  color-scheme: dark;
-  font-family: "Space Grotesk", "Poppins", "Segoe UI", sans-serif;
-  background: #0b0f1a;
-  color: #e5e7eb;
-  --bg: #0b0f1a;
-  --surface: #121826;
-  --surface-strong: #0f172a;
-  --primary: #3b82f6;
-  --accent: #d4af37;
-  --text: #e5e7eb;
-  --muted: #9ca3af;
-  --border: rgba(148, 163, 184, 0.2);
-  --glow: rgba(59, 130, 246, 0.25);
+  color-scheme: light;
+  font-family: "Source Serif 4", "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+  background: #f6f2e9;
+  color: #1d1b16;
+  --bg: #f6f2e9;
+  --surface: #fbf8f2;
+  --surface-strong: #f0e9dc;
+  --primary: #1f2a44;
+  --accent: #b08b2e;
+  --text: #1d1b16;
+  --muted: #6c6256;
+  --border: rgba(64, 50, 34, 0.18);
+  --glow: rgba(176, 139, 46, 0.18);
 }
 
 * {
@@ -20,7 +22,11 @@
 
 body {
   margin: 0;
-  background: radial-gradient(circle at 5% 0%, rgba(59, 130, 246, 0.18), transparent 45%), #0b0f1a;
+  background:
+    radial-gradient(circle at 85% 0%, rgba(176, 139, 46, 0.16), transparent 40%),
+    radial-gradient(circle at 10% 20%, rgba(31, 42, 68, 0.08), transparent 45%),
+    repeating-linear-gradient(90deg, rgba(31, 42, 68, 0.03) 0 1px, transparent 1px 12px),
+    #f6f2e9;
   color: var(--text);
 }
 
@@ -37,8 +43,8 @@ button {
 
 .sidebar {
   width: 280px;
-  background: rgba(12, 16, 28, 0.95);
-  border-right: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(251, 248, 242, 0.98);
+  border-right: 1px solid rgba(64, 50, 34, 0.12);
   display: flex;
   flex-direction: column;
   padding: 20px 16px;
@@ -65,7 +71,7 @@ button {
 .sidebar__heading {
   font-size: 12px;
   text-transform: uppercase;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.18em;
   color: var(--muted);
 }
 
@@ -93,12 +99,12 @@ button {
 }
 
 .chat-list__item:hover {
-  background: rgba(148, 163, 184, 0.1);
+  background: rgba(31, 42, 68, 0.06);
 }
 
 .chat-list__item.is-active {
-  border-color: rgba(212, 175, 55, 0.5);
-  background: rgba(212, 175, 55, 0.08);
+  border-color: rgba(176, 139, 46, 0.5);
+  background: rgba(176, 139, 46, 0.12);
 }
 
 .chat-list__title {
@@ -128,9 +134,9 @@ button {
   font-size: 11px;
   padding: 4px 8px;
   border-radius: 999px;
-  border: 1px solid rgba(212, 175, 55, 0.4);
+  border: 1px solid rgba(176, 139, 46, 0.4);
   color: var(--accent);
-  background: rgba(212, 175, 55, 0.08);
+  background: rgba(176, 139, 46, 0.08);
 }
 
 .sidebar__bottom {
@@ -140,7 +146,7 @@ button {
 
 .sidebar__link {
   background: transparent;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid rgba(64, 50, 34, 0.2);
   color: var(--text);
   border-radius: 10px;
   padding: 8px 12px;
@@ -150,17 +156,17 @@ button {
 .user-card {
   display: grid;
   gap: 10px;
-  background: rgba(18, 24, 38, 0.9);
+  background: rgba(248, 243, 233, 0.9);
   border-radius: 14px;
   padding: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid rgba(64, 50, 34, 0.2);
 }
 
 .user-card__avatar {
   width: 38px;
   height: 38px;
   border-radius: 50%;
-  background: rgba(212, 175, 55, 0.12);
+  background: rgba(176, 139, 46, 0.12);
   color: var(--accent);
   display: grid;
   place-items: center;
@@ -179,7 +185,7 @@ button {
 
 .user-card__logout {
   background: transparent;
-  border: 1px solid rgba(148, 163, 184, 0.3);
+  border: 1px solid rgba(64, 50, 34, 0.3);
   color: var(--text);
   padding: 6px 10px;
   border-radius: 8px;
@@ -199,8 +205,8 @@ button {
   align-items: center;
   justify-content: space-between;
   padding: 0 28px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
-  background: rgba(11, 15, 26, 0.9);
+  border-bottom: 1px solid rgba(64, 50, 34, 0.12);
+  background: rgba(251, 248, 242, 0.95);
 }
 
 .topbar__brand {
@@ -210,23 +216,20 @@ button {
 }
 
 .topbar__brand-text {
-  font-size: 20px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  background: linear-gradient(120deg, #f8fafc 10%, #d4af37 45%, #6ee7ff 90%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  text-shadow: 0 0 24px rgba(110, 231, 255, 0.25), 0 0 32px rgba(212, 175, 55, 0.2);
+  font-family: "Playfair Display", "Source Serif 4", serif;
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--primary);
 }
 
 .topbar__badge {
   font-size: 12px;
   color: var(--accent);
-  border: 1px solid rgba(212, 175, 55, 0.4);
+  border: 1px solid rgba(176, 139, 46, 0.4);
   padding: 4px 10px;
   border-radius: 999px;
-  background: rgba(212, 175, 55, 0.08);
+  background: rgba(176, 139, 46, 0.1);
 }
 
 .chat-window {
@@ -256,16 +259,22 @@ button {
 
 .message-card {
   max-width: 720px;
-  background: rgba(18, 24, 38, 0.9);
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: var(--surface);
+  border: 1px solid rgba(64, 50, 34, 0.16);
   border-radius: 14px;
   padding: 14px 16px;
-  line-height: 1.6;
+  line-height: 1.65;
+  box-shadow: 0 10px 24px rgba(31, 42, 68, 0.06);
+}
+
+.message-row.is-assistant .message-card {
+  border-left: 3px solid rgba(176, 139, 46, 0.7);
 }
 
 .message-row.is-user .message-card {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: rgba(59, 130, 246, 0.4);
+  background: rgba(31, 42, 68, 0.08);
+  border-color: rgba(31, 42, 68, 0.22);
+  border-left: 3px solid rgba(31, 42, 68, 0.5);
 }
 
 .message-card p {
@@ -285,10 +294,10 @@ button {
 .composer {
   display: grid;
   gap: 10px;
-  background: rgba(12, 16, 28, 0.9);
+  background: var(--surface-strong);
   border-radius: 16px;
   padding: 14px 16px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid rgba(64, 50, 34, 0.16);
 }
 
 .composer__actions {
@@ -317,7 +326,7 @@ button {
 }
 
 .icon-btn {
-  border: 1px solid rgba(148, 163, 184, 0.3);
+  border: 1px solid rgba(64, 50, 34, 0.3);
   background: transparent;
   color: var(--muted);
   padding: 6px 10px;
@@ -335,12 +344,12 @@ button {
 
 .btn-primary {
   background: var(--primary);
-  color: #0b0f1a;
+  color: #f6f2e9;
 }
 
 .btn-secondary {
   background: transparent;
-  border: 1px solid rgba(148, 163, 184, 0.3);
+  border: 1px solid rgba(64, 50, 34, 0.3);
   color: var(--text);
 }
 
@@ -373,7 +382,7 @@ button {
   display: inline-flex;
   padding: 2px;
   border-radius: 999px;
-  background: rgba(15, 23, 42, 0.6);
+  background: rgba(31, 42, 68, 0.08);
   border: 1px solid var(--border);
   gap: 6px;
 }
@@ -391,14 +400,14 @@ button {
 
 .segmented__btn.is-active {
   background: var(--primary);
-  color: #0b0f1a;
+  color: #f6f2e9;
 }
 
 .sources-panel {
-  background: rgba(18, 24, 38, 0.8);
+  background: var(--surface);
   border-radius: 12px;
   padding: 10px 14px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid rgba(64, 50, 34, 0.2);
   color: var(--text);
   min-width: 260px;
 }
@@ -420,8 +429,8 @@ button {
 .sources li {
   padding: 12px;
   border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(64, 50, 34, 0.2);
+  background: rgba(31, 42, 68, 0.04);
 }
 
 .source__meta {
@@ -442,17 +451,20 @@ button {
   display: grid;
   place-items: center;
   padding: 40px 20px;
-  background: radial-gradient(circle at top, rgba(59, 130, 246, 0.2), transparent 55%), #0b0f1a;
+  background:
+    radial-gradient(circle at top, rgba(176, 139, 46, 0.16), transparent 55%),
+    #f6f2e9;
 }
 
 .auth__panel {
   width: min(420px, 100%);
-  background: rgba(18, 24, 38, 0.9);
+  background: rgba(251, 248, 242, 0.95);
   border-radius: 18px;
   padding: 28px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid rgba(64, 50, 34, 0.2);
   display: grid;
   gap: 18px;
+  box-shadow: 0 30px 60px rgba(31, 42, 68, 0.12);
 }
 
 .auth__brand h1 {
@@ -473,7 +485,7 @@ button {
   flex: 1;
   padding: 8px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid rgba(64, 50, 34, 0.2);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -481,7 +493,7 @@ button {
 
 .tab.is-active {
   background: var(--primary);
-  color: #0b0f1a;
+  color: #f6f2e9;
   border-color: transparent;
 }
 
@@ -499,8 +511,8 @@ button {
 .auth__form input {
   padding: 10px 12px;
   border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(64, 50, 34, 0.2);
+  background: rgba(255, 255, 255, 0.7);
   color: var(--text);
 }
 
@@ -529,11 +541,12 @@ button {
 }
 
 .error {
-  color: #fca5a5;
-  background: rgba(185, 28, 28, 0.2);
+  color: #7a1f1f;
+  background: rgba(185, 28, 28, 0.08);
   padding: 10px 12px;
   border-radius: 10px;
-  border: 1px solid rgba(248, 113, 113, 0.4);
+  border: 1px solid rgba(185, 28, 28, 0.2);
+  border-left: 3px solid rgba(185, 28, 28, 0.5);
 }
 
 .muted {

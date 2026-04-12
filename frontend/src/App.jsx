@@ -38,16 +38,25 @@ const formatTimestamp = (value) => {
 const buildUrl = (path) => (API_BASE_URL ? `${API_BASE_URL}${path}` : path);
 
 const requestJson = async (path, options = {}) => {
+  const { allow401 = false, ...fetchOptions } = options;
   const response = await fetch(buildUrl(path), {
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
-      ...(options.headers || {})
+      ...(fetchOptions.headers || {})
     },
-    ...options
+    ...fetchOptions
   });
 
   if (!response.ok) {
+    if (response.status === 401 && allow401) {
+      return { unauthenticated: true };
+    }
+    if (response.status === 401 && !path.startsWith("/auth/")) {
+      const authError = new Error("Not authenticated");
+      authError.name = "AuthError";
+      throw authError;
+    }
     const contentType = response.headers.get("content-type") || "";
     let detail = "";
     if (contentType.includes("application/json")) {
@@ -91,7 +100,11 @@ export default function App() {
   useEffect(() => {
     const loadSession = async () => {
       try {
-        const data = await requestJson("/auth/me");
+        const data = await requestJson("/auth/me", { allow401: true });
+        if (data?.unauthenticated) {
+          setUser(null);
+          return;
+        }
         setUser(data.user);
         await loadChats();
       } catch (err) {
@@ -101,32 +114,64 @@ export default function App() {
     loadSession();
   }, []);
 
+  const handleAuthFailure = () => {
+    setUser(null);
+    setChats([]);
+    setMessages([]);
+    setActiveChatId(null);
+    setError("");
+  };
+
   const loadChats = async () => {
-    const data = await requestJson("/chats");
-    setChats(data.chats || []);
-    if (data.chats && data.chats.length > 0) {
-      await selectChat(data.chats[0].id);
+    try {
+      const data = await requestJson("/chats");
+      setChats(data.chats || []);
+      if (data.chats && data.chats.length > 0) {
+        await selectChat(data.chats[0].id);
+      }
+    } catch (err) {
+      if (err.name === "AuthError") {
+        handleAuthFailure();
+        return;
+      }
+      throw err;
     }
   };
 
   const selectChat = async (chatId) => {
-    const data = await requestJson(`/chats/${chatId}`);
-    setActiveChatId(chatId);
-    setMessages(data.messages || []);
-    setSources([]);
-    setError("");
+    try {
+      const data = await requestJson(`/chats/${chatId}`);
+      setActiveChatId(chatId);
+      setMessages(data.messages || []);
+      setSources([]);
+      setError("");
+    } catch (err) {
+      if (err.name === "AuthError") {
+        handleAuthFailure();
+        return;
+      }
+      throw err;
+    }
   };
 
   const startNewChat = async () => {
-    const data = await requestJson("/chats", {
-      method: "POST",
-      body: JSON.stringify({ title: "New chat" })
-    });
-    setChats((prev) => [data.chat, ...prev]);
-    setActiveChatId(data.chat.id);
-    setMessages([]);
-    setSources([]);
-    setQuery("");
+    try {
+      const data = await requestJson("/chats", {
+        method: "POST",
+        body: JSON.stringify({ title: "New chat" })
+      });
+      setChats((prev) => [data.chat, ...prev]);
+      setActiveChatId(data.chat.id);
+      setMessages([]);
+      setSources([]);
+      setQuery("");
+    } catch (err) {
+      if (err.name === "AuthError") {
+        handleAuthFailure();
+        return;
+      }
+      throw err;
+    }
   };
 
   const updateChatTitle = (chatId, title) => {
@@ -166,10 +211,7 @@ export default function App() {
     try {
       await requestJson("/auth/logout", { method: "POST" });
     } finally {
-      setUser(null);
-      setChats([]);
-      setMessages([]);
-      setActiveChatId(null);
+      handleAuthFailure();
     }
   };
 
@@ -204,6 +246,10 @@ export default function App() {
         setChats((prev) => [data.chat, ...prev]);
         setActiveChatId(chatId);
       } catch (err) {
+        if (err.name === "AuthError") {
+          handleAuthFailure();
+          return;
+        }
         setError(err.message || "Unable to create a chat yet.");
       }
     }
@@ -235,6 +281,10 @@ export default function App() {
       setSources(data.sources || []);
       updateChatTitle(chatId, data.chat_title);
     } catch (err) {
+      if (err.name === "AuthError") {
+        handleAuthFailure();
+        return;
+      }
       if (err.name !== "AbortError") {
         setError(err.message || "Something went wrong.");
       }
