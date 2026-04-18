@@ -17,10 +17,13 @@ def _lazy_imports():
 			"LLM dependencies are not available. Install torch/transformers or set LLM_ENABLED=0."
 		) from exc
 
-try:
-	import bitsandbytes as _bnb  # noqa: F401
-	_BNB_AVAILABLE = True
-except Exception:  # pragma: no cover
+if os.getenv("LLM_4BIT", "0") == "1":
+	try:
+		import bitsandbytes as _bnb  # noqa: F401
+		_BNB_AVAILABLE = True
+	except Exception:  # pragma: no cover
+		_BNB_AVAILABLE = False
+else:
 	_BNB_AVAILABLE = False
 
 _LLM_ENABLED = os.getenv("LLM_ENABLED", "1") == "1"
@@ -63,7 +66,7 @@ class LLMService:
 			self.use_4bit = False
 		self.model = AutoModelForCausalLM.from_pretrained(
 			self.model_id,
-			torch_dtype="auto",
+			dtype="auto",
 			device_map=self.device_map,
 			trust_remote_code=True,
 			quantization_config=quantization_config,

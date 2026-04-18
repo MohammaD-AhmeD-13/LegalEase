@@ -4,9 +4,9 @@ import os
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import text
@@ -21,7 +21,9 @@ from backend.services.llm_service import (
     is_llm_ready,
     is_llm_enabled,
 )
+from backend.services.ocr_service import extract_text
 from backend.services.retrieval_service import get_retrieval_service
+from backend.services.risk_engine import analyze_risks
 
 try:  # Optional local env loading
     from dotenv import load_dotenv
@@ -37,6 +39,68 @@ logger = logging.getLogger("uvicorn.error")
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "legalease_session")
 SESSION_TTL_HOURS = int(os.getenv("SESSION_TTL_HOURS", "168"))
 HISTORY_LIMIT = 6
+MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "10"))
+REFERRAL_SCORE_THRESHOLD = float(os.getenv("REFERRAL_SCORE_THRESHOLD", "0.2"))
+
+EXPLICIT_REFERRAL_PATTERNS = [
+    r"\bneed\s+(a\s+)?lawyer\b",
+    r"\bneed\s+(an\s+)?expert\b",
+    r"\bconsult\s+(a\s+)?lawyer\b",
+    r"\bspeak\s+to\s+(a\s+)?lawyer\b",
+    r"\bprofessional\s+help\b",
+    r"\bescalate\b",
+]
+
+OUT_OF_SCOPE_PATTERNS = [
+    r"outside\s+scope",
+    r"cannot\s+advise",
+    r"not\s+qualified",
+    r"beyond\s+jurisdiction",
+    r"consult\s+.*lawyer",
+]
+
+EXPERT_REFERRALS: Dict[str, Dict[str, str]] = {
+    "Business / Corporate Law": {
+        "name": "Ayesha Khan",
+        "title": "Corporate Lawyer",
+        "experience": "7 years",
+        "domain": "Business / Corporate Law",
+        "email": "ayesha.khan@legalease.pk",
+        "photo_url": "",
+    },
+    "Contract Law": {
+        "name": "Bilal Siddiqui",
+        "title": "Contracts Specialist",
+        "experience": "9 years",
+        "domain": "Contract Law",
+        "email": "bilal.siddiqui@legalease.pk",
+        "photo_url": "",
+    },
+    "Tax Law": {
+        "name": "Sara Malik",
+        "title": "Tax & Compliance Counsel",
+        "experience": "8 years",
+        "domain": "Tax Law",
+        "email": "sara.malik@legalease.pk",
+        "photo_url": "",
+    },
+    "Employment / Labour Law": {
+        "name": "Hassan Raza",
+        "title": "Labour Law Advocate",
+        "experience": "6 years",
+        "domain": "Employment / Labour Law",
+        "email": "hassan.raza@legalease.pk",
+        "photo_url": "",
+    },
+    "General": {
+        "name": "Amina Noor",
+        "title": "Legal Advisor",
+        "experience": "10 years",
+        "domain": "General Legal",
+        "email": "amina.noor@legalease.pk",
+        "photo_url": "",
+    },
+}
 
 app.add_middleware(
     CORSMiddleware,
@@ -166,6 +230,28 @@ class ChatResponse(BaseModel):
     updated_at: datetime
 
 
+class RiskyClause(BaseModel):
+    clause: str
+    severity: Literal["High", "Medium", "Low"]
+    reason: str
+
+
+class ComplianceIssue(BaseModel):
+    issue: str
+    reason: str
+
+
+class DocumentReviewResponse(BaseModel):
+    risky_clauses: List[RiskyClause]
+    compliance_issues: List[ComplianceIssue]
+    recommendations: List[str]
+
+
+class DocumentSummaryResponse(BaseModel):
+    summary: str
+    language: str
+
+
 def _contains_urdu(text: str) -> bool:
     return bool(re.search(r"[\u0600-\u06FF]", text))
 
@@ -198,6 +284,116 @@ def _format_history(history: Optional[List[ChatTurn]], max_turns: int = 4) -> st
         label = "User" if turn.role == "user" else "Assistant"
         lines.append(f"{label}: {turn.content}")
     return "\n".join(lines)
+
+
+def _clean_summary_output(text: str) -> str:
+    lines = [line.strip() for line in (text or "").splitlines()]
+    cleaned = []
+    seen_summary = False
+    for line in lines:
+        if not line:
+            cleaned.append("")
+            continue
+        if line.strip("-").strip() == "":
+            continue
+        lowered = line.lower()
+        if lowered == "summary:":
+            if seen_summary:
+                continue
+            seen_summary = True
+        cleaned.append(line)
+    while cleaned and cleaned[-1] == "":
+        cleaned.pop()
+    return "\n".join(cleaned)
+
+
+def _validate_upload(filename: str) -> None:
+    if not filename:
+        raise HTTPException(status_code=400, detail="File name is missing")
+    lower = filename.lower()
+    if not (lower.endswith(".pdf") or lower.endswith(".docx")):
+        raise HTTPException(status_code=400, detail="Only PDF and DOCX files are supported")
+
+
+def _ensure_size_limit(size_bytes: int) -> None:
+    limit = MAX_FILE_SIZE_MB * 1024 * 1024
+    if size_bytes > limit:
+        raise HTTPException(status_code=413, detail=f"File exceeds {MAX_FILE_SIZE_MB} MB limit")
+
+
+def _normalize_list(values: object) -> List[str]:
+    if not isinstance(values, list):
+        return []
+    return [str(item) for item in values if item]
+
+
+def _normalize_clauses(values: object) -> List[RiskyClause]:
+    if not isinstance(values, list):
+        return []
+    normalized = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        severity = str(item.get("severity", "Medium")).capitalize()
+        if severity not in {"High", "Medium", "Low"}:
+            severity = "Medium"
+        normalized.append(
+            RiskyClause(
+                clause=str(item.get("clause", "")).strip(),
+                severity=severity,
+                reason=str(item.get("reason", "")).strip(),
+            )
+        )
+    return normalized
+
+
+def _normalize_issues(values: object) -> List[ComplianceIssue]:
+    if not isinstance(values, list):
+        return []
+    normalized = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        normalized.append(
+            ComplianceIssue(
+                issue=str(item.get("issue", "")).strip(),
+                reason=str(item.get("reason", "")).strip(),
+            )
+        )
+    return normalized
+
+
+def _needs_referral(matches: List[dict], answer: str, query: str = "") -> bool:
+    lowered_query = (query or "").lower()
+    for pattern in EXPLICIT_REFERRAL_PATTERNS:
+        if re.search(pattern, lowered_query):
+            return True
+    if not matches:
+        return True
+    top_score = matches[0].get("score") or 0.0
+    if top_score < REFERRAL_SCORE_THRESHOLD:
+        return True
+    lowered = (answer or "").lower()
+    if "don't have enough information" in lowered or "do not have enough information" in lowered:
+        return True
+    for pattern in OUT_OF_SCOPE_PATTERNS:
+        if re.search(pattern, lowered):
+            return True
+    return False
+
+
+def _select_referral(matches: List[dict]) -> Dict[str, str]:
+    domain_counts: Dict[str, int] = {}
+    for item in matches:
+        domain = str(item.get("domain") or "").strip()
+        if not domain:
+            continue
+        domain_counts[domain] = domain_counts.get(domain, 0) + 1
+    if domain_counts:
+        best_domain = max(domain_counts.items(), key=lambda pair: pair[1])[0]
+        if best_domain in EXPERT_REFERRALS:
+            return EXPERT_REFERRALS[best_domain]
+    return EXPERT_REFERRALS["General"]
 
 
 def _create_session(db: Session, user_id: str) -> str:
@@ -322,6 +518,78 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)):
 @app.get("/auth/me")
 def me(current_user: User = Depends(get_current_user)):
     return {"user": {"id": current_user.id, "name": current_user.name, "email": current_user.email}}
+
+
+@app.post("/documents/review", response_model=DocumentReviewResponse)
+async def review_document(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    _validate_upload(file.filename)
+    data = await file.read()
+    _ensure_size_limit(len(data))
+
+    text = extract_text(file.filename, data)
+    if not text:
+        raise HTTPException(status_code=400, detail="Unable to extract text from the document")
+    if not is_llm_enabled():
+        raise HTTPException(status_code=503, detail="LLM is disabled")
+
+    llm = get_llm_service()
+    analysis = await analyze_risks(text, llm)
+    return DocumentReviewResponse(
+        risky_clauses=_normalize_clauses(analysis.get("risky_clauses")),
+        compliance_issues=_normalize_issues(analysis.get("compliance_issues")),
+        recommendations=_normalize_list(analysis.get("recommendations")),
+    )
+
+
+@app.post("/documents/summarize", response_model=DocumentSummaryResponse)
+async def summarize_document(
+    file: UploadFile = File(...),
+    language: str = Form("en"),
+    current_user: User = Depends(get_current_user),
+):
+    _validate_upload(file.filename)
+    data = await file.read()
+    _ensure_size_limit(len(data))
+
+    text = extract_text(file.filename, data)
+    if not text:
+        raise HTTPException(status_code=400, detail="Unable to extract text from the document")
+    if language not in {"en", "ur"}:
+        raise HTTPException(status_code=400, detail="Language must be 'en' or 'ur'")
+    if not is_llm_enabled():
+        raise HTTPException(status_code=503, detail="LLM is disabled")
+
+    excerpt = text.strip()[:12000]
+    prompt = (
+        "You are a legal assistant for Pakistan. "
+        "Explain the document below in simple, plain language for a non-expert. "
+        "Focus on: parties, obligations, payments, deadlines, termination, penalties, and key risks. "
+        "Do not provide legal advice. Use short paragraphs and '-' bullets. "
+        "Format the response with these headings in order (no duplicates): "
+        "Summary:, Key Clauses:, Key Risks:. "
+        "Summary should be 2-4 sentences. "
+        "Key Clauses and Key Risks should be bullet lists. "
+        "Omit empty sections. End with a complete sentence (no truncation).\n\n"
+        f"Document excerpt:\n{excerpt}"
+    )
+    llm = get_llm_service()
+    summary = await llm.generate(prompt, max_new_tokens=384)
+
+    if language == "ur":
+        summary = await _translate_to_urdu(llm, summary, 256)
+    elif language == "en" and _contains_urdu(summary):
+        translate_prompt = (
+            "Translate the answer below into English. "
+            "Respond ONLY in English. Do not use Urdu.\n\n"
+            f"Answer:\n{summary}"
+        )
+        summary = await llm.generate(translate_prompt, max_new_tokens=256)
+
+    summary = _clean_summary_output(summary)
+    return DocumentSummaryResponse(summary=summary, language=language)
 
 
 @app.get("/chats")
@@ -462,6 +730,8 @@ async def rag_answer(
                 f"Answer:\n{answer}"
             )
             answer = await llm.generate(translate_prompt, max_new_tokens=request.max_new_tokens)
+        needs_referral = _needs_referral(matches, answer, request.query)
+        referral_expert = _select_referral(matches) if needs_referral else None
         if chat is not None:
             user_message = Message(
                 chat_id=chat.id,
@@ -485,6 +755,8 @@ async def rag_answer(
             "sources": matches,
             "language": request.language,
             "chat_title": chat.title if chat is not None else None,
+            "needs_referral": needs_referral,
+            "referral_expert": referral_expert,
         }
     except HTTPException:
         raise

@@ -22,6 +22,10 @@ export default defineConfig(({ mode }) => {
         "/chats": {
           target: backendTarget,
           changeOrigin: true
+        },
+        "/documents": {
+          target: backendTarget,
+          changeOrigin: true
         }
       }
     }

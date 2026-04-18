@@ -76,6 +76,166 @@ const requestJson = async (path, options = {}) => {
   return response.json();
 };
 
+const requestForm = async (path, formData) => {
+  const response = await fetch(buildUrl(path), {
+    method: "POST",
+    credentials: "include",
+    body: formData
+  });
+
+  if (!response.ok) {
+    if (response.status === 401 && !path.startsWith("/auth/")) {
+      const authError = new Error("Not authenticated");
+      authError.name = "AuthError";
+      throw authError;
+    }
+    const contentType = response.headers.get("content-type") || "";
+    let detail = "";
+    if (contentType.includes("application/json")) {
+      const data = await response.json().catch(() => null);
+      detail = data?.detail || JSON.stringify(data || {});
+    } else {
+      detail = await response.text();
+    }
+    throw new Error(detail || "Request failed");
+  }
+  return response.json();
+};
+
+const formatReviewMessage = (filename, review) => {
+  const lines = [];
+  lines.push(`Document review: ${filename}`);
+  lines.push("");
+  if (review.summary) {
+    lines.push("Summary:");
+    lines.push(review.summary);
+    lines.push("");
+  }
+  lines.push("Risky clauses:");
+  if (review.risky_clauses?.length) {
+    review.risky_clauses.forEach((item, index) => {
+      const severity = (item.severity || "Medium").toUpperCase();
+      lines.push(`${index + 1}. [${severity}] ${item.reason}`);
+      lines.push(`   Clause: ${item.clause}`);
+    });
+  } else {
+    lines.push("- No risky clauses found.");
+  }
+  lines.push("");
+  lines.push("Compliance issues:");
+  if (review.compliance_issues?.length) {
+    review.compliance_issues.forEach((issue) => {
+      lines.push(`- ${issue.issue}: ${issue.reason}`);
+    });
+  } else {
+    lines.push("- None flagged.");
+  }
+  lines.push("");
+  lines.push("Recommendations:");
+  if (review.recommendations?.length) {
+    review.recommendations.forEach((item) => lines.push(`- ${item}`));
+  } else {
+    lines.push("- None provided.");
+  }
+  return lines.join("\n");
+};
+
+const ensureSummaryHeading = (summary) => {
+  const trimmed = (summary || "").trim();
+  if (!trimmed) {
+    return "Summary:\nNo summary returned.";
+  }
+  const lines = trimmed.split("\n").map((line) => line.trim());
+  const cleanedLines = [];
+  let summarySeen = false;
+  for (const line of lines) {
+    if (/^summary:\s*$/i.test(line)) {
+      if (summarySeen) {
+        continue;
+      }
+      summarySeen = true;
+      cleanedLines.push("Summary:");
+      continue;
+    }
+    cleanedLines.push(line);
+  }
+  if (!summarySeen) {
+    return `Summary:\n${cleanedLines.join("\n").trim()}`;
+  }
+  return cleanedLines.join("\n").trim();
+};
+
+const formatSummaryMessage = (summary) => ensureSummaryHeading(summary);
+
+const renderInline = (text, keyPrefix) => {
+  const parts = String(text || "").split("**");
+  return parts.map((part, index) =>
+    index % 2 === 1
+      ? <strong key={`${keyPrefix}-b-${index}`}>{part}</strong>
+      : <span key={`${keyPrefix}-t-${index}`}>{part}</span>
+  );
+};
+
+const renderMessageContent = (content) => {
+  const lines = String(content || "").split("\n");
+  const blocks = [];
+  let listItems = [];
+
+  const flushList = () => {
+    if (listItems.length) {
+      blocks.push({ type: "list", items: listItems });
+      listItems = [];
+    }
+  };
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    const bulletMatch = /^[-*]\s+(.+)/.exec(trimmed);
+    if (bulletMatch) {
+      listItems.push(bulletMatch[1]);
+      return;
+    }
+    flushList();
+    if (!trimmed) {
+      blocks.push({ type: "spacer" });
+      return;
+    }
+    if (/:$/.test(trimmed)) {
+      blocks.push({ type: "heading", text: trimmed });
+      return;
+    }
+    blocks.push({ type: "text", text: trimmed });
+  });
+  flushList();
+
+  return blocks.map((block, index) => {
+    if (block.type === "heading") {
+      return (
+        <p key={`h-${index}`} className="message-heading">
+          {renderInline(block.text, `h-${index}`)}
+        </p>
+      );
+    }
+    if (block.type === "list") {
+      return (
+        <ul key={`l-${index}`} className="message-list">
+          {block.items.map((item, itemIndex) => (
+            <li key={`li-${index}-${itemIndex}`}>{renderInline(item, `li-${index}-${itemIndex}`)}</li>
+          ))}
+        </ul>
+      );
+    }
+    if (block.type === "spacer") {
+      return <div key={`s-${index}`} className="message-spacer" />;
+    }
+    return (
+      <p key={`p-${index}`}>
+        {renderInline(block.text, `p-${index}`)}
+      </p>
+    );
+  });
+};
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [authView, setAuthView] = useState("login");
@@ -94,6 +254,12 @@ export default function App() {
   const [language, setLanguage] = useState("en");
   const [exampleIndex, setExampleIndex] = useState(0);
   const [abortController, setAbortController] = useState(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewFile, setReviewFile] = useState(null);
+  const [reviewError, setReviewError] = useState("");
+  const [reviewResult, setReviewResult] = useState(null);
+  const [reviewing, setReviewing] = useState(false);
+  const [summarizing, setSummarizing] = useState(false);
 
   const canSubmit = useMemo(() => query.trim().length >= 3 && !loading, [query, loading]);
 
@@ -179,6 +345,34 @@ export default function App() {
     setChats((prev) =>
       prev.map((chat) => (chat.id === chatId ? { ...chat, title, updated_at: new Date().toISOString() } : chat))
     );
+  };
+
+  const handleDeleteChat = async (chatId) => {
+    const chat = chats.find((item) => item.id === chatId);
+    if (!chat) return;
+    const confirmed = window.confirm(`Delete chat "${chat.title}"? This cannot be undone.`);
+    if (!confirmed) return;
+
+    try {
+      await requestJson(`/chats/${chatId}`, { method: "DELETE" });
+      setChats((prev) => prev.filter((item) => item.id !== chatId));
+      if (activeChatId === chatId) {
+        const remaining = chats.filter((item) => item.id !== chatId);
+        if (remaining.length) {
+          await selectChat(remaining[0].id);
+        } else {
+          setActiveChatId(null);
+          setMessages([]);
+          setSources([]);
+        }
+      }
+    } catch (err) {
+      if (err.name === "AuthError") {
+        handleAuthFailure();
+        return;
+      }
+      setError(err.message || "Unable to delete this chat.");
+    }
   };
 
   const handleAuthSubmit = async (event) => {
@@ -275,7 +469,8 @@ export default function App() {
         id: createTempId(),
         role: "assistant",
         content: data.answer || "",
-        language: data.language || language
+        language: data.language || language,
+        referral: data.needs_referral ? data.referral_expert : null
       };
       setMessages((prev) => [...prev, assistantMessage]);
       setSources(data.sources || []);
@@ -315,10 +510,130 @@ export default function App() {
     }, 0);
   };
 
+  const handleExampleSelect = (prompt) => {
+    setQuery(prompt);
+    setError("");
+    setSources([]);
+    setTimeout(() => {
+      const input = document.getElementById("query");
+      if (input) {
+        input.focus();
+      }
+    }, 0);
+  };
+
   const handleComposerKeyDown = (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       handleSubmit();
+    }
+  };
+
+  const openReviewModal = () => {
+    setReviewOpen(true);
+    setReviewError("");
+  };
+
+  const closeReviewModal = () => {
+    setReviewOpen(false);
+    setReviewFile(null);
+    setReviewError("");
+    setReviewResult(null);
+    setReviewing(false);
+    setSummarizing(false);
+  };
+
+  const handleReviewFileChange = (event) => {
+    const file = event.target.files?.[0] || null;
+    setReviewResult(null);
+    if (!file) {
+      setReviewFile(null);
+      return;
+    }
+    const lowerName = file.name.toLowerCase();
+    if (!lowerName.endsWith(".pdf") && !lowerName.endsWith(".docx")) {
+      setReviewError("Only PDF and DOCX files are supported.");
+      setReviewFile(null);
+      return;
+    }
+    setReviewError("");
+    setReviewFile(file);
+  };
+
+  const handleReviewSubmit = async () => {
+    if (!reviewFile || reviewing) return;
+    setReviewError("");
+    setReviewing(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", reviewFile);
+      const data = await requestForm("/documents/review", formData);
+      setReviewResult(data);
+      const userMessage = {
+        id: createTempId(),
+        role: "user",
+        content: `Uploaded document: ${reviewFile.name}`
+      };
+      const assistantMessage = {
+        id: createTempId(),
+        role: "assistant",
+        content: formatReviewMessage(reviewFile.name, data)
+      };
+      setMessages((prev) => [...prev, userMessage, assistantMessage]);
+      if (activeChatId) {
+        updateChatTitle(activeChatId, `Document Review: ${reviewFile.name}`);
+      }
+      setReviewOpen(false);
+      setReviewFile(null);
+      setReviewError("");
+    } catch (err) {
+      if (err.name === "AuthError") {
+        handleAuthFailure();
+        return;
+      }
+      setReviewError(err.message || "Unable to review this document yet.");
+    } finally {
+      setReviewing(false);
+    }
+  };
+
+  const handleSummarySubmit = async () => {
+    if (!reviewFile || summarizing) return;
+    setReviewError("");
+    setSummarizing(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", reviewFile);
+      formData.append("language", language);
+      const data = await requestForm("/documents/summarize", formData);
+      const userMessage = {
+        id: createTempId(),
+        role: "user",
+        content: `Summarize document: ${reviewFile.name}`
+      };
+      const assistantMessage = {
+        id: createTempId(),
+        role: "assistant",
+        content: formatSummaryMessage(data.summary),
+        language: data.language || language
+      };
+      setMessages((prev) => [...prev, userMessage, assistantMessage]);
+      if (activeChatId) {
+        updateChatTitle(activeChatId, `Document Summary: ${reviewFile.name}`);
+      }
+      setReviewOpen(false);
+      setReviewFile(null);
+      setReviewError("");
+    } catch (err) {
+      if (err.name === "AuthError") {
+        handleAuthFailure();
+        return;
+      }
+      setReviewError(err.message || "Unable to summarize this document yet.");
+    } finally {
+      setSummarizing(false);
     }
   };
 
@@ -402,44 +717,62 @@ export default function App() {
             New chat
           </button>
           <button type="button" className="btn btn-secondary" onClick={handleExample}>
-            Try example
+            Try Example [{EXAMPLES[exampleIndex].label}]
           </button>
-        </div>
-        <div className="sidebar__examples">
-          <div className="sidebar__heading">Example scenarios</div>
-          <div className="example-tags">
-            {EXAMPLES.map((item) => (
-              <span key={item.label} className="example-tag">{item.label}</span>
-            ))}
-          </div>
         </div>
         <div className="sidebar__section">
           <div className="sidebar__heading">Chats</div>
           <ul className="chat-list">
             {chats.map((chat) => (
               <li key={chat.id}>
-                <button
-                  type="button"
-                  className={activeChatId === chat.id ? "chat-list__item is-active" : "chat-list__item"}
-                  onClick={() => selectChat(chat.id)}
-                >
-                  <span className="chat-list__title">{chat.title}</span>
-                  <span className="chat-list__time">{formatTimestamp(chat.updated_at)}</span>
-                </button>
+                <div className="chat-list__row">
+                  <button
+                    type="button"
+                    className={activeChatId === chat.id ? "chat-list__item is-active" : "chat-list__item"}
+                    onClick={() => selectChat(chat.id)}
+                  >
+                    <span className="chat-list__title">{chat.title}</span>
+                    <span className="chat-list__time">{formatTimestamp(chat.updated_at)}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="chat-delete"
+                    onClick={() => handleDeleteChat(chat.id)}
+                    aria-label={`Delete ${chat.title}`}
+                    title="Delete chat"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12M10 11v6M14 11v6"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+                </div>
               </li>
             ))}
             {!chats.length && <li className="chat-list__empty">No chats yet.</li>}
           </ul>
         </div>
         <div className="sidebar__bottom">
-          <button type="button" className="sidebar__link">Settings</button>
           <div className="user-card">
-            <div className="user-card__avatar">
-              {user.name.split(" ").map((part) => part[0]).join("").slice(0, 2)}
-            </div>
-            <div className="user-card__info">
-              <p>{user.name}</p>
-              <span>{user.email}</span>
+            <div className="user-card__header">
+              <div className="user-card__identity">
+                <div className="user-card__avatar">
+                  {user.name.split(" ").map((part) => part[0]).join("").slice(0, 2)}
+                </div>
+                <div className="user-card__info">
+                  <p>{user.name}</p>
+                  <span>{user.email}</span>
+                  <button type="button" className="user-card__settings" title="Settings" aria-label="Settings">
+                    Settings
+                  </button>
+                </div>
+              </div>
             </div>
             <button type="button" className="user-card__logout" onClick={handleLogout}>
               Sign out
@@ -465,7 +798,29 @@ export default function App() {
                 className={`message-row ${message.role === "user" ? "is-user" : "is-assistant"} ${message.language === "ur" ? "is-urdu" : ""}`}
               >
                 <div className="message-card">
-                  <p>{message.content}</p>
+                  {message.role === "assistant" ? renderMessageContent(message.content) : <p>{message.content}</p>}
+                  {message.referral && (
+                    <div className="referral-card">
+                      <div className="referral-card__header">
+                        <div className="referral-avatar">
+                          {message.referral.photo_url ? (
+                            <img src={message.referral.photo_url} alt={message.referral.name} />
+                          ) : (
+                            <span>{message.referral.name.split(" ").map((part) => part[0]).join("").slice(0, 2)}</span>
+                          )}
+                        </div>
+                        <div>
+                          <strong>{message.referral.name}</strong>
+                          <p className="muted">{message.referral.title}</p>
+                        </div>
+                      </div>
+                      <div className="referral-card__details">
+                        <span>Domain: {message.referral.domain}</span>
+                        <span>Experience: {message.referral.experience}</span>
+                        <span>Email: {message.referral.email}</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -481,8 +836,8 @@ export default function App() {
 
           <form className="composer" onSubmit={handleSubmit}>
             <div className="composer__actions">
-              <button type="button" className="icon-btn" disabled title="Upload documents">
-                Upload
+              <button type="button" className="icon-btn" onClick={openReviewModal} title="Upload documents">
+                Upload a document/contract for review
               </button>
               <button type="button" className="icon-btn" disabled title="Voice input">
                 Voice
@@ -491,7 +846,7 @@ export default function App() {
             <label className="sr-only" htmlFor="query">Ask a legal question</label>
             <textarea
               id="query"
-              rows="2"
+              rows="1"
               placeholder="Send a message"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -550,6 +905,57 @@ export default function App() {
             </details>
           </div>
         </section>
+
+        {reviewOpen && (
+          <div className="modal-overlay" role="dialog" aria-modal="true">
+            <div className="modal">
+              <div className="modal__header">
+                <div>
+                  <h2>Document review</h2>
+                  <p className="muted">Upload a PDF or DOCX for compliance review or a plain-language summary.</p>
+                </div>
+                <button type="button" className="modal__close" onClick={closeReviewModal}>Close</button>
+              </div>
+              <div className="modal__body">
+                <label className="file-drop">
+                  <input
+                    type="file"
+                    accept=".pdf,.docx"
+                    onChange={handleReviewFileChange}
+                  />
+                  <div>
+                    <strong>{reviewFile ? reviewFile.name : "Drop a file or click to upload"}</strong>
+                    <span>PDF or DOCX only. Max 10MB.</span>
+                  </div>
+                </label>
+
+                {reviewError && <p className="error">{reviewError}</p>}
+
+              </div>
+              <div className="modal__footer">
+                <button type="button" className="btn btn-secondary" onClick={closeReviewModal}>
+                  Close
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleSummarySubmit}
+                  disabled={!reviewFile || reviewing || summarizing}
+                >
+                  {summarizing ? "Summarizing..." : "Summarize document"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleReviewSubmit}
+                  disabled={!reviewFile || reviewing || summarizing}
+                >
+                  {reviewing ? "Reviewing..." : "Review document"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );
