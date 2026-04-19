@@ -1,4 +1,5 @@
 from threading import Thread
+import base64
 import logging
 import os
 import re
@@ -13,7 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.app.db import Base, engine, get_db
-from backend.app.models import Chat, Message, Session as AuthSession, User
+from backend.app.models import Chat, DocumentBadge, Message, Session as AuthSession, User
 from backend.app.security import hash_password, verify_password
 from backend.services.llm_service import (
     get_llm_service,
@@ -21,9 +22,16 @@ from backend.services.llm_service import (
     is_llm_ready,
     is_llm_enabled,
 )
+from backend.services.document_templates import (
+    list_templates,
+    render_template,
+    render_html_document,
+    render_pdf_from_html,
+)
 from backend.services.ocr_service import extract_text
 from backend.services.retrieval_service import get_retrieval_service
 from backend.services.risk_engine import analyze_risks
+from backend.services.translation_service import translate_to_english, translate_to_urdu, translate_text
 
 try:  # Optional local env loading
     from dotenv import load_dotenv
@@ -224,6 +232,15 @@ class MessageResponse(BaseModel):
     created_at: datetime
 
 
+class TranslatedMessageResponse(BaseModel):
+    id: str
+    role: str
+    content: str
+    language: Optional[str]
+    created_at: datetime
+    translated_content: Optional[str] = None
+
+
 class ChatResponse(BaseModel):
     id: str
     title: str
@@ -252,27 +269,57 @@ class DocumentSummaryResponse(BaseModel):
     language: str
 
 
+class TemplateField(BaseModel):
+    key: str
+    label: str
+    required: bool
+    placeholder: Optional[str] = None
+    default: Optional[str] = None
+
+
+class TemplateSummary(BaseModel):
+    id: str
+    name: str
+    description: str
+    fields: List[TemplateField]
+
+
+class DocumentGenerateRequest(BaseModel):
+    template_id: str = Field(..., min_length=2)
+    fields: Dict[str, str]
+    language: str = Field("en", pattern="^(en|ur)$")
+    polish_with_llm: bool = False
+    include_pdf: bool = False
+    chat_id: Optional[str] = None
+
+
+class DocumentGenerateResponse(BaseModel):
+    title: str
+    content: str
+    language: str
+    pdf_base64: Optional[str] = None
+    filename: Optional[str] = None
+
+
+class DocumentPdfRequest(BaseModel):
+    title: str = Field(..., min_length=2)
+    content: str = Field(..., min_length=1)
+
+
+class DocumentPdfResponse(BaseModel):
+    pdf_base64: str
+    filename: str
+
+
+class DocumentBadgeResponse(BaseModel):
+    id: str
+    title: str
+    created_at: datetime
+
+
 def _contains_urdu(text: str) -> bool:
     return bool(re.search(r"[\u0600-\u06FF]", text))
 
-
-async def _translate_to_urdu(llm, english_text: str, max_new_tokens: int) -> str:
-    translate_prompt = (
-        "Translate the answer below into clear, natural Urdu. "
-        "Use Urdu script only, no English or Roman Urdu. "
-        "Keep it short (4-6 sentences) and easy to read.\n\n"
-        f"Answer:\n{english_text}"
-    )
-    urdu = await llm.generate(translate_prompt, max_new_tokens=max_new_tokens)
-    if _contains_urdu(urdu):
-        return urdu
-
-    stricter_prompt = (
-        "صرف اردو میں جواب دیں۔ انگریزی یا رومن اردو استعمال نہ کریں۔ "
-        "جواب مختصر اور واضح رکھیں (زیادہ سے زیادہ 5 جملے).\n\n"
-        f"Answer:\n{english_text}"
-    )
-    return await llm.generate(stricter_prompt, max_new_tokens=max_new_tokens)
 
 
 def _format_history(history: Optional[List[ChatTurn]], max_turns: int = 4) -> str:
@@ -305,6 +352,55 @@ def _clean_summary_output(text: str) -> str:
     while cleaned and cleaned[-1] == "":
         cleaned.pop()
     return "\n".join(cleaned)
+
+
+def _ensure_summary_heading(summary: str) -> str:
+    trimmed = (summary or "").strip()
+    if not trimmed:
+        return "Summary:\nNo summary returned."
+    lines = [line.strip() for line in trimmed.splitlines()]
+    cleaned = []
+    summary_seen = False
+    for line in lines:
+        if line.lower() == "summary:":
+            if summary_seen:
+                continue
+            summary_seen = True
+            cleaned.append("Summary:")
+            continue
+        cleaned.append(line)
+    if not summary_seen:
+        return f"Summary:\n{chr(10).join(cleaned).strip()}"
+    return "\n".join(cleaned).strip()
+
+
+def _format_review_message(filename: str, review: DocumentReviewResponse) -> str:
+    lines = []
+    lines.append(f"Document review: {filename}")
+    lines.append("")
+    lines.append("Risky clauses:")
+    if review.risky_clauses:
+        for index, item in enumerate(review.risky_clauses, start=1):
+            severity = (item.severity or "Medium").upper()
+            lines.append(f"{index}. [{severity}] {item.reason}")
+            lines.append(f"   Clause: {item.clause}")
+    else:
+        lines.append("- No risky clauses found.")
+    lines.append("")
+    lines.append("Compliance issues:")
+    if review.compliance_issues:
+        for issue in review.compliance_issues:
+            lines.append(f"- {issue.issue}: {issue.reason}")
+    else:
+        lines.append("- None flagged.")
+    lines.append("")
+    lines.append("Recommendations:")
+    if review.recommendations:
+        for item in review.recommendations:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- None provided.")
+    return "\n".join(lines)
 
 
 def _validate_upload(filename: str) -> None:
@@ -396,6 +492,12 @@ def _select_referral(matches: List[dict]) -> Dict[str, str]:
     return EXPERT_REFERRALS["General"]
 
 
+def _referral_intro(language: str) -> str:
+    if language == "ur":
+        return "میں یہاں مکمل مدد نہیں کر سکتا، لیکن میں آپ کو ایک قانونی ماہر سے جوڑ سکتا ہوں۔"
+    return "I'm not able to fully help here, but I can refer you to a legal expert."
+
+
 def _create_session(db: Session, user_id: str) -> str:
     session_id = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + timedelta(hours=SESSION_TTL_HOURS)
@@ -440,6 +542,25 @@ def _serialize_message(message: Message) -> MessageResponse:
         content=message.content,
         language=message.language,
         created_at=message.created_at,
+    )
+
+
+def _serialize_translated_message(message: Message, translated_content: Optional[str]) -> TranslatedMessageResponse:
+    return TranslatedMessageResponse(
+        id=message.id,
+        role=message.role,
+        content=message.content,
+        language=message.language,
+        created_at=message.created_at,
+        translated_content=translated_content,
+    )
+
+
+def _serialize_document_badge(badge: DocumentBadge) -> DocumentBadgeResponse:
+    return DocumentBadgeResponse(
+        id=badge.id,
+        title=badge.title,
+        created_at=badge.created_at,
     )
 
 
@@ -524,6 +645,8 @@ def me(current_user: User = Depends(get_current_user)):
 async def review_document(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    chat_id: Optional[str] = Form(None),
 ):
     _validate_upload(file.filename)
     data = await file.read()
@@ -537,11 +660,37 @@ async def review_document(
 
     llm = get_llm_service()
     analysis = await analyze_risks(text, llm)
-    return DocumentReviewResponse(
+    response = DocumentReviewResponse(
         risky_clauses=_normalize_clauses(analysis.get("risky_clauses")),
         compliance_issues=_normalize_issues(analysis.get("compliance_issues")),
         recommendations=_normalize_list(analysis.get("recommendations")),
     )
+    if chat_id:
+        chat = (
+            db.query(Chat)
+            .filter(Chat.id == chat_id, Chat.user_id == current_user.id)
+            .first()
+        )
+        if chat is None:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        user_message = Message(
+            chat_id=chat.id,
+            role="user",
+            content=f"Uploaded document: {file.filename}",
+            language="en",
+        )
+        assistant_message = Message(
+            chat_id=chat.id,
+            role="assistant",
+            content=_format_review_message(file.filename or "document", response),
+            language="en",
+        )
+        if chat.title == "New chat":
+            chat.title = f"Document Review: {(file.filename or 'document')[:60]}"
+        chat.updated_at = datetime.utcnow()
+        db.add_all([user_message, assistant_message, chat])
+        db.commit()
+    return response
 
 
 @app.post("/documents/summarize", response_model=DocumentSummaryResponse)
@@ -549,6 +698,8 @@ async def summarize_document(
     file: UploadFile = File(...),
     language: str = Form("en"),
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    chat_id: Optional[str] = Form(None),
 ):
     _validate_upload(file.filename)
     data = await file.read()
@@ -578,18 +729,151 @@ async def summarize_document(
     llm = get_llm_service()
     summary = await llm.generate(prompt, max_new_tokens=384)
 
+    response_language = language
     if language == "ur":
-        summary = await _translate_to_urdu(llm, summary, 256)
+        summary = translate_to_urdu(summary)
+        if not _contains_urdu(summary):
+            response_language = "en"
     elif language == "en" and _contains_urdu(summary):
-        translate_prompt = (
-            "Translate the answer below into English. "
-            "Respond ONLY in English. Do not use Urdu.\n\n"
-            f"Answer:\n{summary}"
-        )
-        summary = await llm.generate(translate_prompt, max_new_tokens=256)
+        summary = translate_to_english(summary)
 
     summary = _clean_summary_output(summary)
-    return DocumentSummaryResponse(summary=summary, language=language)
+    response = DocumentSummaryResponse(summary=summary, language=response_language)
+    if chat_id:
+        chat = (
+            db.query(Chat)
+            .filter(Chat.id == chat_id, Chat.user_id == current_user.id)
+            .first()
+        )
+        if chat is None:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        user_message = Message(
+            chat_id=chat.id,
+            role="user",
+            content=f"Summarize document: {file.filename}",
+            language=language,
+        )
+        assistant_message = Message(
+            chat_id=chat.id,
+            role="assistant",
+            content=_ensure_summary_heading(response.summary),
+            language=response.language,
+        )
+        if chat.title == "New chat":
+            chat.title = f"Document Summary: {(file.filename or 'document')[:60]}"
+        chat.updated_at = datetime.utcnow()
+        db.add_all([user_message, assistant_message, chat])
+        db.commit()
+    return response
+
+
+@app.get("/documents/templates", response_model=List[TemplateSummary])
+def get_document_templates(current_user: User = Depends(get_current_user)):
+    return list_templates()
+
+
+@app.get("/documents/badges", response_model=List[DocumentBadgeResponse])
+def list_document_badges(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    badges = (
+        db.query(DocumentBadge)
+        .filter(DocumentBadge.user_id == current_user.id)
+        .order_by(DocumentBadge.created_at.desc())
+        .all()
+    )
+    return [_serialize_document_badge(badge) for badge in badges]
+
+
+@app.post("/documents/generate", response_model=DocumentGenerateResponse)
+async def generate_document(
+    request: DocumentGenerateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        title, content = render_template(request.template_id, request.fields)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if request.polish_with_llm:
+        if not is_llm_enabled():
+            raise HTTPException(status_code=503, detail="LLM is disabled")
+        llm = get_llm_service()
+        polish_prompt = (
+            "Improve clarity and consistency of the document below without adding, removing, or reordering clauses. "
+            "Preserve headings and line breaks. Do not add legal advice. Respond ONLY in English.\n\n"
+            f"Document:\n{content}"
+        )
+        content = await llm.generate(polish_prompt, max_new_tokens=512)
+
+    response_language = "en" if request.language == "ur" else request.language
+
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", title).strip("_") or "document"
+    filename = f"{safe_name}.pdf"
+    pdf_base64 = None
+    if request.include_pdf:
+        try:
+            html = render_html_document(title, content)
+            pdf_bytes = render_pdf_from_html(html)
+            pdf_base64 = base64.b64encode(pdf_bytes).decode("ascii")
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if request.chat_id:
+        chat = (
+            db.query(Chat)
+            .filter(Chat.id == request.chat_id, Chat.user_id == current_user.id)
+            .first()
+        )
+        if chat is None:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        user_message = Message(
+            chat_id=chat.id,
+            role="user",
+            content=f"Generate document: {title}",
+            language=request.language,
+        )
+        assistant_message = Message(
+            chat_id=chat.id,
+            role="assistant",
+            content=content,
+            language=request.language,
+        )
+        if chat.title == "New chat":
+            chat.title = title[:60]
+        chat.updated_at = datetime.utcnow()
+        badge = DocumentBadge(user_id=current_user.id, title=title)
+        db.add_all([user_message, assistant_message, chat, badge])
+        db.commit()
+    else:
+        badge = DocumentBadge(user_id=current_user.id, title=title)
+        db.add(badge)
+        db.commit()
+
+    return DocumentGenerateResponse(
+        title=title,
+        content=content,
+        language=response_language,
+        pdf_base64=pdf_base64,
+        filename=filename if pdf_base64 else None,
+    )
+
+
+@app.post("/documents/render/pdf", response_model=DocumentPdfResponse)
+def render_document_pdf(
+    request: DocumentPdfRequest,
+    current_user: User = Depends(get_current_user),
+):
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", request.title).strip("_") or "document"
+    filename = f"{safe_name}.pdf"
+    try:
+        html = render_html_document(request.title, request.content)
+        pdf_bytes = render_pdf_from_html(html)
+        pdf_base64 = base64.b64encode(pdf_bytes).decode("ascii")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return DocumentPdfResponse(pdf_base64=pdf_base64, filename=filename)
 
 
 @app.get("/chats")
@@ -634,6 +918,48 @@ def get_chat(
     return {
         "chat": _serialize_chat(chat),
         "messages": [_serialize_message(message) for message in messages],
+    }
+
+
+@app.post("/chats/{chat_id}/translate")
+def translate_chat_messages(
+    chat_id: str,
+    target: str = "ur",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if target not in {"ur", "en"}:
+        raise HTTPException(status_code=400, detail="Target language must be 'ur' or 'en'")
+    chat = db.query(Chat).filter(Chat.id == chat_id, Chat.user_id == current_user.id).first()
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    messages = (
+        db.query(Message)
+        .filter(Message.chat_id == chat_id)
+        .order_by(Message.created_at.asc())
+        .all()
+    )
+    translated_messages = []
+    for message in messages:
+        translated_content = None
+        if message.role == "assistant":
+            if target == "ur":
+                if _contains_urdu(message.content):
+                    translated_content = message.content
+                else:
+                    candidate = translate_text(message.content, "en", "ur")
+                    translated_content = candidate if _contains_urdu(candidate) else None
+            else:
+                if not _contains_urdu(message.content):
+                    translated_content = message.content
+                else:
+                    candidate = translate_text(message.content, "auto", "en")
+                    translated_content = None if _contains_urdu(candidate) else candidate
+        translated_messages.append(_serialize_translated_message(message, translated_content))
+    return {
+        "chat": _serialize_chat(chat),
+        "messages": translated_messages,
+        "target": target,
     }
 
 
@@ -721,17 +1047,21 @@ async def rag_answer(
         llm = get_llm_service()
         answer = await llm.generate(base_prompt, max_new_tokens=request.max_new_tokens)
 
+        response_language = request.language
         if request.language == "ur":
-            answer = await _translate_to_urdu(llm, answer, request.max_new_tokens)
+            answer = translate_to_urdu(answer)
+            if not _contains_urdu(answer):
+                response_language = "en"
         elif request.language == "en" and _contains_urdu(answer):
-            translate_prompt = (
-                "Translate the answer below into English. "
-                "Respond ONLY in English. Do not use Urdu.\n\n"
-                f"Answer:\n{answer}"
-            )
-            answer = await llm.generate(translate_prompt, max_new_tokens=request.max_new_tokens)
+            answer = translate_to_english(answer)
         needs_referral = _needs_referral(matches, answer, request.query)
         referral_expert = _select_referral(matches) if needs_referral else None
+        if needs_referral:
+            intro_line = _referral_intro(request.language)
+            if not (answer or "").strip():
+                answer = intro_line
+            else:
+                answer = f"{intro_line}\n\n{answer.strip()}"
         if chat is not None:
             user_message = Message(
                 chat_id=chat.id,
@@ -753,7 +1083,7 @@ async def rag_answer(
         return {
             "answer": answer,
             "sources": matches,
-            "language": request.language,
+            "language": response_language,
             "chat_title": chat.title if chat is not None else None,
             "needs_referral": needs_referral,
             "referral_expert": referral_expert,

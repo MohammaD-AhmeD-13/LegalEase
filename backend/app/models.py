@@ -18,6 +18,7 @@ class User(Base):
 
     sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
     chats = relationship("Chat", back_populates="user", cascade="all, delete-orphan")
+    document_badges = relationship("DocumentBadge", back_populates="user", cascade="all, delete-orphan")
 
 
 class Session(Base):
@@ -42,6 +43,17 @@ class Chat(Base):
 
     user = relationship("User", back_populates="chats")
     messages = relationship("Message", back_populates="chat", cascade="all, delete-orphan")
+
+
+class DocumentBadge(Base):
+    __tablename__ = "document_badges"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    user = relationship("User", back_populates="document_badges")
 
 
 class Message(Base):

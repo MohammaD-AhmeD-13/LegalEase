@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Source+Serif+4:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Source+Serif+4:wght@400;500;600&family=Noto+Nastaliq+Urdu:wght@400;600&display=swap");
 
 :root {
   color-scheme: light;
@@ -50,6 +50,7 @@ button {
   flex-direction: column;
   padding: 16px 14px;
   gap: 16px;
+  min-height: 0;
 }
 
 .sidebar__top {
@@ -65,6 +66,23 @@ button {
   min-height: 0;
 }
 
+.sidebar__section--documents {
+  flex: 0 0 auto;
+}
+
+.sidebar__section--chats {
+  gap: 4px;
+  margin-top: -4px;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.sidebar__section--chats > summary {
+  flex: 0 0 auto;
+}
+
 .sidebar__examples {
   display: grid;
   gap: 8px;
@@ -77,15 +95,222 @@ button {
   color: var(--muted);
 }
 
+.sidebar__heading--accordion {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sidebar__heading--accordion::-webkit-details-marker {
+  display: none;
+}
+
+.sidebar__heading--accordion::after {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--muted);
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease, border-top-color 0.15s ease;
+}
+
+details[open] > .sidebar__heading--accordion::after {
+  transform: rotate(0deg);
+}
+
+.generator {
+  display: grid;
+  gap: 10px;
+  padding: 4px 0 8px;
+}
+
+.generator__field {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.generator__field span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.generator__field input,
+.generator__select {
+  border: 1px solid rgba(64, 50, 34, 0.2);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(251, 248, 242, 0.9);
+  color: var(--text);
+}
+
+.generator__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.generator-view {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.generator-card {
+  width: min(780px, 95vw);
+  background: var(--surface);
+  border-radius: 20px;
+  border: 1px solid rgba(64, 50, 34, 0.18);
+  box-shadow: 0 30px 70px rgba(31, 42, 68, 0.12);
+  display: grid;
+  gap: 18px;
+  padding: 22px 24px;
+  margin: 16px 0;
+}
+
+.generator-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(64, 50, 34, 0.12);
+}
+
+.generator-card__header h2 {
+  margin: 0 0 6px;
+  font-family: "Playfair Display", "Source Serif 4", serif;
+}
+
+.generator__actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.generator__actions--form {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: stretch;
+}
+
+.generator__actions--form .btn {
+  width: 100%;
+}
+
+.generator__preview {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.generator__preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.generator__preview span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+.generator__preview textarea {
+  border: 1px solid rgba(64, 50, 34, 0.2);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(251, 248, 242, 0.9);
+  color: var(--text);
+  font-size: 13px;
+  resize: vertical;
+}
+
+.generator__toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.generator__toolbar button {
+  border: 1px solid rgba(64, 50, 34, 0.3);
+  background: transparent;
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .chat-list {
   list-style: none;
   padding: 0;
   margin: 0;
   display: grid;
   gap: 6px;
+}
+
+.chat-list__scroll {
   overflow-y: auto;
+  overflow-x: hidden;
   scroll-behavior: smooth;
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: clamp(140px, calc(100vh - 430px), 420px);
+}
+
+.document-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
   max-height: 100%;
+}
+
+.document-item {
+  border: 1px solid rgba(176, 139, 46, 0.35);
+  background: rgba(176, 139, 46, 0.12);
+  border-radius: 12px;
+  padding: 8px 10px;
+  text-align: left;
+  display: grid;
+  gap: 4px;
+  color: var(--text);
+}
+
+.document-item__label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.document-item__title {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.document-list__empty {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 2px 4px 6px;
+  margin-top: -4px;
 }
 
 .chat-list__row {
@@ -107,6 +332,7 @@ button {
   flex-direction: column;
   gap: 4px;
   cursor: pointer;
+  overflow: hidden;
 }
 
 .chat-delete {
@@ -148,13 +374,12 @@ button {
 
 .chat-list__title {
   font-size: 14px;
-  font-weight: 600;
-  line-height: 1.4;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  font-weight: 500;
+  line-height: 1.2;
+  font-size: 13px;
+  white-space: nowrap;
   overflow: hidden;
-  word-break: break-word;
+  text-overflow: ellipsis;
 }
 
 .chat-list__time {
@@ -383,6 +608,24 @@ button {
   min-height: 0;
 }
 
+.chat-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.chat-toolbar__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.error-inline {
+  font-size: 12px;
+  color: #7a1f1f;
+}
+
 .chat-messages {
   flex: 1;
   display: flex;
@@ -489,7 +732,7 @@ button {
 }
 
 .message-row.is-urdu .message-card {
-  font-family: "Noto Nastaliq Urdu", "Space Grotesk", sans-serif;
+  font-family: "Noto Nastaliq Urdu", "Noto Naskh Arabic", serif;
   direction: rtl;
 }
 
@@ -531,6 +774,8 @@ button {
 .composer__controls {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
 }
 
 .icon-btn {
@@ -540,6 +785,19 @@ button {
   padding: 6px 10px;
   border-radius: 10px;
   font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.icon-btn:hover {
+  background: rgba(176, 139, 46, 0.12);
+  border-color: rgba(176, 139, 46, 0.5);
+  color: var(--text);
+}
+
+.icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .btn {

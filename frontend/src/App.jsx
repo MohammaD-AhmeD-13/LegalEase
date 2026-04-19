@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const EXAMPLES = [
   {
@@ -167,6 +167,24 @@ const ensureSummaryHeading = (summary) => {
 
 const formatSummaryMessage = (summary) => ensureSummaryHeading(summary);
 
+const downloadPdf = (base64, filename) => {
+  if (!base64) return;
+  const byteCharacters = atob(base64);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i += 1) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename || "document.pdf";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
+
 const renderInline = (text, keyPrefix) => {
   const parts = String(text || "").split("**");
   return parts.map((part, index) =>
@@ -236,6 +254,12 @@ const renderMessageContent = (content) => {
   });
 };
 
+const truncateTitle = (title, maxLength = 28) => {
+  const value = String(title || "").trim();
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+};
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [authView, setAuthView] = useState("login");
@@ -260,8 +284,31 @@ export default function App() {
   const [reviewResult, setReviewResult] = useState(null);
   const [reviewing, setReviewing] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
+  const [translatedMessages, setTranslatedMessages] = useState({});
+  const [showTranslations, setShowTranslations] = useState(false);
+  const [translatingMessages, setTranslatingMessages] = useState(false);
+  const [translationError, setTranslationError] = useState("");
+
+  const [templates, setTemplates] = useState([]);
+  const [templateId, setTemplateId] = useState("");
+  const [templateFields, setTemplateFields] = useState({});
+  const [templateError, setTemplateError] = useState("");
+  const [polishWithLlm, setPolishWithLlm] = useState(false);
+  const [generatingDocument, setGeneratingDocument] = useState(false);
+  const [lastGenerated, setLastGenerated] = useState(null);
+  const [editedDocument, setEditedDocument] = useState("");
+  const [generatorView, setGeneratorView] = useState(false);
+  const [showEditor, setShowEditor] = useState(false);
+  const [generatedDocsByChat, setGeneratedDocsByChat] = useState({});
+  const [editedDocsByChat, setEditedDocsByChat] = useState({});
+  const [generatedDocs, setGeneratedDocs] = useState([]);
+  const editorRef = useRef(null);
 
   const canSubmit = useMemo(() => query.trim().length >= 3 && !loading, [query, loading]);
+  const selectedTemplate = useMemo(
+    () => templates.find((template) => template.id === templateId) || null,
+    [templates, templateId]
+  );
 
   useEffect(() => {
     const loadSession = async () => {
@@ -272,7 +319,9 @@ export default function App() {
           return;
         }
         setUser(data.user);
+        await loadTemplates();
         await loadChats();
+        await loadDocumentBadges();
       } catch (err) {
         setUser(null);
       }
@@ -286,6 +335,61 @@ export default function App() {
     setMessages([]);
     setActiveChatId(null);
     setError("");
+    setTemplates([]);
+    setTemplateId("");
+    setTemplateFields({});
+    setTemplateError("");
+    setPolishWithLlm(false);
+    setGeneratingDocument(false);
+    setLastGenerated(null);
+    setGeneratedDocsByChat({});
+    setEditedDocsByChat({});
+    setGeneratedDocs([]);
+    setTranslatedMessages({});
+    setShowTranslations(false);
+    setTranslatingMessages(false);
+    setTranslationError("");
+  };
+
+  const initializeTemplateFields = (template) => {
+    if (!template?.fields) return {};
+    return template.fields.reduce((acc, field) => {
+      const defaultValue = field.default || "";
+      acc[field.key] = defaultValue;
+      return acc;
+    }, {});
+  };
+
+  const loadTemplates = async () => {
+    try {
+      const data = await requestJson("/documents/templates");
+      const templatesList = Array.isArray(data) ? data : [];
+      setTemplates(templatesList);
+      if (templatesList.length) {
+        const first = templatesList[0];
+        setTemplateId(first.id);
+        setTemplateFields(initializeTemplateFields(first));
+        setTemplateError("");
+      }
+    } catch (err) {
+      if (err.name === "AuthError") {
+        handleAuthFailure();
+        return;
+      }
+      setTemplateError(err.message || "Unable to load templates.");
+    }
+  };
+
+  const loadDocumentBadges = async () => {
+    try {
+      const data = await requestJson("/documents/badges");
+      setGeneratedDocs(Array.isArray(data) ? data : []);
+    } catch (err) {
+      if (err.name === "AuthError") {
+        handleAuthFailure();
+        return;
+      }
+    }
   };
 
   const loadChats = async () => {
@@ -311,6 +415,20 @@ export default function App() {
       setMessages(data.messages || []);
       setSources([]);
       setError("");
+      setShowTranslations(false);
+      setTranslatedMessages({});
+      setTranslationError("");
+      const storedDoc = generatedDocsByChat[chatId];
+      if (storedDoc) {
+        const storedEdit = editedDocsByChat[chatId] || storedDoc.content || "";
+        setLastGenerated(storedDoc);
+        setEditedDocument(storedEdit);
+        setGeneratorView(true);
+        setShowEditor(true);
+      } else {
+        setGeneratorView(false);
+        setShowEditor(false);
+      }
     } catch (err) {
       if (err.name === "AuthError") {
         handleAuthFailure();
@@ -428,6 +546,9 @@ export default function App() {
     setQuery("");
     setError("");
     setSources([]);
+    setShowTranslations(false);
+    setTranslatedMessages({});
+    setTranslationError("");
 
     let chatId = activeChatId;
     if (!chatId) {
@@ -495,6 +616,37 @@ export default function App() {
     }
   };
 
+  const handleTranslateResponses = async () => {
+    if (!activeChatId || translatingMessages) return;
+    if (showTranslations) {
+      setShowTranslations(false);
+      return;
+    }
+    setTranslatingMessages(true);
+    setTranslationError("");
+    try {
+      const data = await requestJson(`/chats/${activeChatId}/translate?target=ur`, {
+        method: "POST"
+      });
+      const map = {};
+      (data.messages || []).forEach((item) => {
+        if (item.translated_content) {
+          map[item.id] = item.translated_content;
+        }
+      });
+      setTranslatedMessages(map);
+      setShowTranslations(true);
+    } catch (err) {
+      if (err.name === "AuthError") {
+        handleAuthFailure();
+        return;
+      }
+      setTranslationError(err.message || "Unable to translate responses.");
+    } finally {
+      setTranslatingMessages(false);
+    }
+  };
+
   const handleExample = () => {
     const nextIndex = (exampleIndex + 1) % EXAMPLES.length;
     const nextPrompt = EXAMPLES[nextIndex].prompt;
@@ -520,6 +672,170 @@ export default function App() {
         input.focus();
       }
     }, 0);
+  };
+
+  const handleTemplateChange = (event) => {
+    const nextId = event.target.value;
+    const nextTemplate = templates.find((template) => template.id === nextId);
+    setTemplateId(nextId);
+    setTemplateFields(initializeTemplateFields(nextTemplate));
+    setTemplateError("");
+  };
+
+  const handleTemplateFieldChange = (key, value) => {
+    setTemplateFields((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const validateTemplateFields = () => {
+    if (!selectedTemplate) {
+      return "Select a template first.";
+    }
+    const missing = selectedTemplate.fields
+      .filter((field) => field.required)
+      .filter((field) => !String(templateFields[field.key] || "").trim())
+      .map((field) => field.label);
+    if (missing.length) {
+      return `Please fill: ${missing.join(", ")}.`;
+    }
+    return "";
+  };
+
+  const handleGenerateDocument = async () => {
+    const validationError = validateTemplateFields();
+    if (validationError) {
+      setTemplateError(validationError);
+      return;
+    }
+
+    setTemplateError("");
+    setGeneratingDocument(true);
+
+    let chatId = activeChatId;
+    if (!chatId) {
+      try {
+        const data = await requestJson("/chats", {
+          method: "POST",
+          body: JSON.stringify({ title: "New chat" })
+        });
+        chatId = data.chat.id;
+        setChats((prev) => [data.chat, ...prev]);
+        setActiveChatId(chatId);
+      } catch (err) {
+        if (err.name === "AuthError") {
+          handleAuthFailure();
+          return;
+        }
+        setTemplateError(err.message || "Unable to create a chat yet.");
+        setGeneratingDocument(false);
+        return;
+      }
+    }
+
+    try {
+      const payload = {
+        template_id: selectedTemplate.id,
+        fields: templateFields,
+        language,
+        polish_with_llm: polishWithLlm,
+        include_pdf: false,
+        ...(chatId ? { chat_id: chatId } : {})
+      };
+      const data = await requestJson("/documents/generate", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+
+      setSources([]);
+      updateChatTitle(chatId, data.title);
+
+      const pdfBase64 = data.pdf_base64 || null;
+      const docPayload = {
+        title: data.title,
+        content: data.content,
+        filename: data.filename,
+        pdfBase64
+      };
+      setLastGenerated(docPayload);
+      setGeneratedDocsByChat((prev) => ({ ...prev, [chatId]: docPayload }));
+      setEditedDocsByChat((prev) => ({ ...prev, [chatId]: data.content || "" }));
+      setEditedDocument(data.content || "");
+      setGeneratorView(true);
+      setShowEditor(true);
+      await loadDocumentBadges();
+    } catch (err) {
+      if (err.name === "AuthError") {
+        handleAuthFailure();
+        return;
+      }
+      setTemplateError(err.message || "Unable to generate the document.");
+    } finally {
+      setGeneratingDocument(false);
+    }
+  };
+  const applyEditorFormat = (prefix, suffix = "") => {
+    const textarea = editorRef.current;
+    if (!textarea) return;
+    const start = textarea.selectionStart || 0;
+    const end = textarea.selectionEnd || 0;
+    const before = editedDocument.slice(0, start);
+    const selected = editedDocument.slice(start, end) || "";
+    const after = editedDocument.slice(end);
+    const next = `${before}${prefix}${selected}${suffix}${after}`;
+    handleEditedDocumentChange(next);
+    requestAnimationFrame(() => {
+      const cursor = start + prefix.length + selected.length + suffix.length;
+      textarea.focus();
+      textarea.setSelectionRange(cursor, cursor);
+    });
+  };
+
+  const handleEditorHeading = () => applyEditorFormat("\n## ");
+  const handleEditorBold = () => applyEditorFormat("**", "**");
+  const handleEditorBullet = () => applyEditorFormat("\n- ");
+
+  const handleEditedDocumentChange = (value) => {
+    setEditedDocument(value);
+    if (activeChatId) {
+      setEditedDocsByChat((prev) => ({ ...prev, [activeChatId]: value }));
+    }
+  };
+
+
+  const handleDownloadGenerated = async () => {
+    const chatId = activeChatId;
+    const storedDoc = (chatId && generatedDocsByChat[chatId]) || lastGenerated;
+    const currentDraft = (chatId && editedDocsByChat[chatId]) || editedDocument;
+    if (!storedDoc?.title || !currentDraft.trim()) {
+      setTemplateError("Generate a document first.");
+      return;
+    }
+    setTemplateError("");
+    try {
+      const data = await requestJson("/documents/render/pdf", {
+        method: "POST",
+        body: JSON.stringify({
+          title: storedDoc.title,
+          content: currentDraft
+        })
+      });
+      const nextDoc = {
+        ...storedDoc,
+        pdfBase64: data.pdf_base64,
+        filename: data.filename
+      };
+      setLastGenerated(nextDoc);
+      if (chatId) {
+        setGeneratedDocsByChat((prev) => ({ ...prev, [chatId]: nextDoc }));
+        setEditedDocsByChat((prev) => ({ ...prev, [chatId]: currentDraft }));
+      }
+      downloadPdf(data.pdf_base64, data.filename);
+    } catch (err) {
+      if (err.name === "AuthError") {
+        handleAuthFailure();
+        return;
+      }
+      setTemplateError(err.message || "Unable to download the document.");
+    }
   };
 
   const handleComposerKeyDown = (event) => {
@@ -568,6 +884,9 @@ export default function App() {
     try {
       const formData = new FormData();
       formData.append("file", reviewFile);
+      if (activeChatId) {
+        formData.append("chat_id", activeChatId);
+      }
       const data = await requestForm("/documents/review", formData);
       setReviewResult(data);
       const userMessage = {
@@ -607,6 +926,9 @@ export default function App() {
       const formData = new FormData();
       formData.append("file", reviewFile);
       formData.append("language", language);
+      if (activeChatId) {
+        formData.append("chat_id", activeChatId);
+      }
       const data = await requestForm("/documents/summarize", formData);
       const userMessage = {
         id: createTempId(),
@@ -719,45 +1041,64 @@ export default function App() {
           <button type="button" className="btn btn-secondary" onClick={handleExample}>
             Try Example [{EXAMPLES[exampleIndex].label}]
           </button>
+          <button type="button" className="btn btn-secondary" onClick={() => setGeneratorView((prev) => !prev)}>
+            {generatorView ? "Back to chat" : "Generate Document"}
+          </button>
         </div>
-        <div className="sidebar__section">
-          <div className="sidebar__heading">Chats</div>
-          <ul className="chat-list">
-            {chats.map((chat) => (
-              <li key={chat.id}>
-                <div className="chat-list__row">
-                  <button
-                    type="button"
-                    className={activeChatId === chat.id ? "chat-list__item is-active" : "chat-list__item"}
-                    onClick={() => selectChat(chat.id)}
-                  >
-                    <span className="chat-list__title">{chat.title}</span>
-                    <span className="chat-list__time">{formatTimestamp(chat.updated_at)}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="chat-delete"
-                    onClick={() => handleDeleteChat(chat.id)}
-                    aria-label={`Delete ${chat.title}`}
-                    title="Delete chat"
-                  >
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <path
-                        d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12M10 11v6M14 11v6"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.6"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </button>
+        <details className="sidebar__section sidebar__section--documents">
+          <summary className="sidebar__heading sidebar__heading--accordion">Documents</summary>
+          <ul className="document-list">
+            {generatedDocs.map((doc) => (
+              <li key={doc.id}>
+                <div className="document-item">
+                  <span className="document-item__label">Draft ready</span>
+                  <span className="document-item__title">{doc.title}</span>
                 </div>
               </li>
             ))}
-            {!chats.length && <li className="chat-list__empty">No chats yet.</li>}
+            {!generatedDocs.length && <li className="document-list__empty">No documents yet.</li>}
           </ul>
-        </div>
+        </details>
+        <details className="sidebar__section sidebar__section--chats" open>
+          <summary className="sidebar__heading sidebar__heading--accordion">Chats</summary>
+          <div className="chat-list__scroll">
+            <ul className="chat-list">
+              {chats.map((chat) => (
+                <li key={chat.id}>
+                  <div className="chat-list__row">
+                    <button
+                      type="button"
+                      className={activeChatId === chat.id ? "chat-list__item is-active" : "chat-list__item"}
+                      onClick={() => selectChat(chat.id)}
+                    >
+                      <span className="chat-list__title">{truncateTitle(chat.title)}</span>
+                      <span className="chat-list__time">{formatTimestamp(chat.updated_at)}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="chat-delete"
+                      onClick={() => handleDeleteChat(chat.id)}
+                      aria-label={`Delete ${chat.title}`}
+                      title="Delete chat"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path
+                          d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12M10 11v6M14 11v6"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.6"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                </li>
+              ))}
+              {!chats.length && <li className="chat-list__empty">No chats yet.</li>}
+            </ul>
+          </div>
+        </details>
         <div className="sidebar__bottom">
           <div className="user-card">
             <div className="user-card__header">
@@ -768,9 +1109,6 @@ export default function App() {
                 <div className="user-card__info">
                   <p>{user.name}</p>
                   <span>{user.email}</span>
-                  <button type="button" className="user-card__settings" title="Settings" aria-label="Settings">
-                    Settings
-                  </button>
                 </div>
               </div>
             </div>
@@ -786,125 +1124,261 @@ export default function App() {
           <div className="topbar__brand">
             <span className="topbar__brand-text">LegalEase</span>
           </div>
-          <div className="topbar__badge">Secure workspace</div>
         </header>
 
-        <section className="chat-window">
-          <div className="chat-messages">
-            {!messages.length && !error && <div className="empty-state" />}
-            {messages.map((message) => (
-              <div
-                key={message.id}
-                className={`message-row ${message.role === "user" ? "is-user" : "is-assistant"} ${message.language === "ur" ? "is-urdu" : ""}`}
-              >
-                <div className="message-card">
-                  {message.role === "assistant" ? renderMessageContent(message.content) : <p>{message.content}</p>}
-                  {message.referral && (
-                    <div className="referral-card">
-                      <div className="referral-card__header">
-                        <div className="referral-avatar">
-                          {message.referral.photo_url ? (
-                            <img src={message.referral.photo_url} alt={message.referral.name} />
-                          ) : (
-                            <span>{message.referral.name.split(" ").map((part) => part[0]).join("").slice(0, 2)}</span>
+        {generatorView ? (
+          <section className="generator-view">
+            <div className="generator-card">
+              <div className="generator-card__header">
+                <div>
+                  <h2>Document generator</h2>
+                  <p className="muted">Fill the fields below to generate a document draft.</p>
+                </div>
+                <button type="button" className="btn btn-secondary" onClick={() => setGeneratorView(false)}>
+                  Back to chat
+                </button>
+              </div>
+              <div className="generator">
+                {!templates.length && <p className="muted">Templates unavailable.</p>}
+                {templates.length > 0 && (
+                  <>
+                    {!showEditor ? (
+                      <>
+                        <label className="generator__field">
+                          <span>Template</span>
+                          <select
+                            className="generator__select"
+                            value={templateId}
+                            onChange={handleTemplateChange}
+                          >
+                            {templates.map((template) => (
+                              <option key={template.id} value={template.id}>
+                                {template.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        {selectedTemplate?.fields?.map((field) => (
+                          <label key={field.key} className="generator__field">
+                            <span>
+                              {field.label}
+                              {field.required ? " *" : ""}
+                            </span>
+                            <input
+                              type="text"
+                              value={templateFields[field.key] || ""}
+                              onChange={(event) => handleTemplateFieldChange(field.key, event.target.value)}
+                              placeholder={field.placeholder || ""}
+                            />
+                          </label>
+                        ))}
+                        <label className="generator__toggle">
+                          <input
+                            type="checkbox"
+                            checked={polishWithLlm}
+                            onChange={(event) => setPolishWithLlm(event.target.checked)}
+                          />
+                          <span>LLM polish</span>
+                        </label>
+                        {templateError && <p className="error">{templateError}</p>}
+                        <div className="generator__actions generator__actions--form">
+                          {activeChatId && generatedDocsByChat[activeChatId] && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => {
+                                const storedDoc = generatedDocsByChat[activeChatId];
+                                const storedEdit = editedDocsByChat[activeChatId] || storedDoc.content || "";
+                                setLastGenerated(storedDoc);
+                                setEditedDocument(storedEdit);
+                                setShowEditor(true);
+                              }}
+                            >
+                              Back to document
+                            </button>
                           )}
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={handleGenerateDocument}
+                            disabled={generatingDocument || !selectedTemplate}
+                          >
+                            {generatingDocument ? "Generating..." : "Generate"}
+                          </button>
                         </div>
-                        <div>
-                          <strong>{message.referral.name}</strong>
-                          <p className="muted">{message.referral.title}</p>
+                      </>
+                    ) : (
+                      <div className="generator__preview">
+                        <div className="generator__preview-header">
+                          <span>Draft (editable)</span>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={() => setShowEditor(false)}
+                          >
+                            Edit form
+                          </button>
                         </div>
+                        <div className="generator__toolbar">
+                          <button type="button" onClick={handleEditorHeading}>Heading</button>
+                          <button type="button" onClick={handleEditorBold}>Bold</button>
+                          <button type="button" onClick={handleEditorBullet}>Bullet</button>
+                        </div>
+                        <textarea
+                          ref={editorRef}
+                          rows="12"
+                          value={editedDocument}
+                          onChange={(event) => handleEditedDocumentChange(event.target.value)}
+                        />
+                        <div className="generator__actions">
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            onClick={handleDownloadGenerated}
+                          >
+                            Download PDF
+                          </button>
+                        </div>
+                        <p className="muted">Edits here affect the downloaded PDF only.</p>
                       </div>
-                      <div className="referral-card__details">
-                        <span>Domain: {message.referral.domain}</span>
-                        <span>Experience: {message.referral.experience}</span>
-                        <span>Email: {message.referral.email}</span>
-                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          </section>
+        ) : (
+          <section className="chat-window">
+            <div className="chat-messages">
+              {!messages.length && !error && <div className="empty-state" />}
+              {messages.map((message) => {
+                const translated = showTranslations && translatedMessages[message.id];
+                const displayLanguage = translated ? "ur" : message.language;
+                const displayContent = translated || message.content;
+                return (
+                  <div
+                    key={message.id}
+                    className={`message-row ${message.role === "user" ? "is-user" : "is-assistant"} ${displayLanguage === "ur" ? "is-urdu" : ""}`}
+                  >
+                    <div className="message-card">
+                      {message.role === "assistant" ? renderMessageContent(displayContent) : <p>{displayContent}</p>}
+                      {message.referral && (
+                        <div className="referral-card">
+                          <div className="referral-card__header">
+                            <div className="referral-avatar">
+                              {message.referral.photo_url ? (
+                                <img src={message.referral.photo_url} alt={message.referral.name} />
+                              ) : (
+                                <span>{message.referral.name.split(" ").map((part) => part[0]).join("").slice(0, 2)}</span>
+                              )}
+                            </div>
+                            <div>
+                              <strong>{message.referral.name}</strong>
+                              <p className="muted">{message.referral.title}</p>
+                            </div>
+                          </div>
+                          <div className="referral-card__details">
+                            <span>Domain: {message.referral.domain}</span>
+                            <span>Experience: {message.referral.experience}</span>
+                            <span>Email: {message.referral.email}</span>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
+                );
+              })}
+              {loading && (
+                <div className="message-row is-assistant">
+                  <div className="message-card is-loading">
+                    <p>Thinking…</p>
+                  </div>
                 </div>
-              </div>
-            ))}
-            {loading && (
-              <div className="message-row is-assistant">
-                <div className="message-card is-loading">
-                  <p>Thinking…</p>
-                </div>
-              </div>
-            )}
-            {error && <p className="error">{error}</p>}
-          </div>
-
-          <form className="composer" onSubmit={handleSubmit}>
-            <div className="composer__actions">
-              <button type="button" className="icon-btn" onClick={openReviewModal} title="Upload documents">
-                Upload a document/contract for review
-              </button>
-              <button type="button" className="icon-btn" disabled title="Voice input">
-                Voice
-              </button>
-            </div>
-            <label className="sr-only" htmlFor="query">Ask a legal question</label>
-            <textarea
-              id="query"
-              rows="1"
-              placeholder="Send a message"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={handleComposerKeyDown}
-            />
-            <div className="composer__controls">
-              {loading ? (
-                <button type="button" className="btn btn-secondary" onClick={handleStop}>
-                  Stop
-                </button>
-              ) : (
-                <button type="button" className="btn btn-primary" onClick={handleSubmit} disabled={loading}>
-                  Send
-                </button>
               )}
+              {error && <p className="error">{error}</p>}
             </div>
-          </form>
 
-          <div className="bottom-panel">
-            <div className="bottom-panel__left">
-              <span className="bottom-panel__label">Response language</span>
-              <div className="segmented" role="group" aria-label="Response language">
+            <form className="composer" onSubmit={handleSubmit}>
+              <div className="composer__actions">
+                <button type="button" className="icon-btn" onClick={openReviewModal} title="Upload documents">
+                  Upload a document/contract for review
+                </button>
+                <button type="button" className="icon-btn" disabled title="Voice input">
+                  Voice
+                </button>
+              </div>
+              <label className="sr-only" htmlFor="query">Ask a legal question</label>
+              <textarea
+                id="query"
+                rows="1"
+                placeholder="Send a message"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={handleComposerKeyDown}
+              />
+              <div className="composer__controls">
                 <button
                   type="button"
-                  className={language === "en" ? "segmented__btn is-active" : "segmented__btn"}
-                  onClick={() => setLanguage("en")}
+                  className="btn btn-secondary"
+                  onClick={handleTranslateResponses}
+                  disabled={!activeChatId || translatingMessages}
                 >
-                  English
+                  {showTranslations ? "Show original" : "Translate responses"}
                 </button>
-                <button
-                  type="button"
-                  className={language === "ur" ? "segmented__btn is-active" : "segmented__btn"}
-                  onClick={() => setLanguage("ur")}
-                >
-                  Urdu
-                </button>
+                {translationError && <span className="error-inline">{translationError}</span>}
+                {loading ? (
+                  <button type="button" className="btn btn-secondary" onClick={handleStop}>
+                    Stop
+                  </button>
+                ) : (
+                  <button type="button" className="btn btn-primary" onClick={handleSubmit} disabled={loading}>
+                    Send
+                  </button>
+                )}
               </div>
+            </form>
+
+            <div className="bottom-panel">
+              <div className="bottom-panel__left">
+                <span className="bottom-panel__label">Response language</span>
+                <div className="segmented" role="group" aria-label="Response language">
+                  <button
+                    type="button"
+                    className={language === "en" ? "segmented__btn is-active" : "segmented__btn"}
+                    onClick={() => setLanguage("en")}
+                  >
+                    English
+                  </button>
+                  <button
+                    type="button"
+                    className={language === "ur" ? "segmented__btn is-active" : "segmented__btn"}
+                    onClick={() => setLanguage("ur")}
+                  >
+                    Urdu
+                  </button>
+                </div>
+              </div>
+              <details className="sources-panel">
+                <summary>Sources</summary>
+                {!sources.length && <p className="muted">No sources yet.</p>}
+                {sources.length > 0 && (
+                  <ul className="sources">
+                    {sources.map((item) => (
+                      <li key={item.chunk_id}>
+                        <div className="source__meta">
+                          <strong>{item.law_name}</strong>
+                          <span>§ {item.section_id}</span>
+                          <span>Score {item.score?.toFixed(3)}</span>
+                        </div>
+                        <p>{item.text}</p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </details>
             </div>
-            <details className="sources-panel">
-              <summary>Sources</summary>
-              {!sources.length && <p className="muted">No sources yet.</p>}
-              {sources.length > 0 && (
-                <ul className="sources">
-                  {sources.map((item) => (
-                    <li key={item.chunk_id}>
-                      <div className="source__meta">
-                        <strong>{item.law_name}</strong>
-                        <span>§ {item.section_id}</span>
-                        <span>Score {item.score?.toFixed(3)}</span>
-                      </div>
-                      <p>{item.text}</p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </details>
-          </div>
-        </section>
+          </section>
+        )}
 
         {reviewOpen && (
           <div className="modal-overlay" role="dialog" aria-modal="true">
@@ -924,7 +1398,7 @@ export default function App() {
                     onChange={handleReviewFileChange}
                   />
                   <div>
-                    <strong>{reviewFile ? reviewFile.name : "Drop a file or click to upload"}</strong>
+                    <strong>{reviewFile ? reviewFile.name : "Drop a file or click to upload "}</strong>
                     <span>PDF or DOCX only. Max 10MB.</span>
                   </div>
                 </label>

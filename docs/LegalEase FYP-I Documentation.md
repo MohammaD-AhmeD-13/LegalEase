@@ -1,120 +1,3 @@
-ABSTRACT
-Getting professional legal help in Pakistan is often difficult due to high costs, linguistic barriers, and the complexity of procedural terminology, leaving individuals, freelancers, and Small-to-Medium Enterprises (SMEs) vulnerable to legal risks. To address this gap, this project presents LegalEase, an AI-powered bilingual legal assistant designed to make civil and commercial legal support available to everyone. Using Natural Language Processing (NLP) and Large Language Models (LLMs), the system provides a user-friendly web interface that helps users understand legal documents more easily. The system offers a comprehensive suite of features, including the automated analysis of contracts to detect risky clauses, the generation of essential legal documents (such as NDAs and affidavits) through dynamic templates, and the summarization of dense legal text into plain Urdu and English. Additionally, LegalEase incorporates a multimodal query engine allowing users to interact via text or voice for context-aware legal guidance. Recognizing the ethical limitations of AI in the legal domain, the system includes a conditional expert referral feature. The system includes an expert referral feature, which connects users to verified professionals for complex queries that require human expertise. Developed using the Incremental Software Process Model, LegalEase aims to reduce dependency on expensive consultations and build a more inclusive, online legal services in Pakistan. 
-TABLE OF CONTENTS
-
-CHAPTER 1	13
-INTRODUCTION	13
-1.1. Background	13
-1.2. Introduction	13
-1.3. Problem Statement	14
-1.4. Objectives	15
-1.5. Project Scope	15
-1.6. Advantages of the System	16
-1.7. Relevance to the Study Program	17
-1.8. Chapter Summary	17
-CHAPTER 2	18
-2.1. EXISTING SYSTEMS	18
-2.2. Drawbacks in Existing Systems	18
-2.3. Examples of Existing Systems	19
-2.3.1 DoNotPay	19
-2.3.2 LegalZoom	19
-2.3.3 Bahaq Legal AI	19
-2.3.4 AI Attorney	19
-2.3.5 Wakeel AI	20
-2.4. Need to Replace Existing Systems	20
-2.5. Chapter Summary	21
-CHAPTER 3	22
-REQUIREMENT ENGINEERING	22
-3.1. Proposed System	22
-3.2. Understanding the System	22
-3.2.1. User Involvement	23
-3.2.2. Stakeholders	23
-3.2.3. Domain	24
-3.2.4. Needs of System	24
-3.2.4.1. Hardware Needs	24
-3.2.4.2. Software Needs	25
-3.2.4.3. Data Needs	25
-3.2.4.4. Security and Privacy Needs	25
-3.2.4.5. Performance and Maintenance Needs	25
-3.2.5. Functional Requirements	26
-3.2.6. Non-Functional Requirements	32
-3.3.2.1 Performance	32
-3.3.2.2 Scalability	32
-3.3.2.3 Security	32
-3.3.2.4 Availability	32
-3.3.2.5 Usability	32
-3.3.2.6 Maintainability	32
-3.3.2.7 Reliability	33
-3.3.2.8 Compatibility	33
-3.3.2.9 Ethical Compliance	33
-3.2.7. Requirements Baseline	33
-3.2.8. Need to Feature Mapping	33
-3.3. Gantt Chart	34
-3.4. Hurdles in Optimizing the Current System	35
-3.4.1 Data Availability	35
-3.4.2 Language and Contextual Complexity	35
-3.4.3 Technical Resource Constraints	35
-3.4.4 Model Accuracy and Validation	36
-3.4.5 Accessibility and Integration	36
-3.5. Chapter Summary	36
-CHAPTER 4	37
-DESIGN	37
-4.1. Software Process Model	37
-4.1.1 Benefits of Selected Model	37
-4.1.2 Limitations of Selected Model	37
-4.2. Design	38
-4.2.1. Methodology of the LegalEase	38
-4.2.2. Entity Relationship Diagram	39
-4.2.3. UML Diagrams	40
-4.2.3.1. Use Case Diagram of LegalEase	40
-4.2.3.2. Class Diagram of LegalEase	41
-4.2.3.3. Activity Diagram of LegalEase	42
-4.2.3.4. Sequence Diagram of LegalEase	43
-4.2.3.5. Component Diagram of LegalEase	44
-4.3. Chapter Summary	44
-REFERENCES	46
-
-	 
-LIST OF FIGURES
-
-FIGURE 3.1 GANTT CHART FOR LEGALEASE	35
-FIGURE 4.1 METHODOLOGY DIAGRAM OF LEGALEASE	38
-FIGURE 4.2 ENTITY RELATIONSHIP DIAGRAM OF LEGALEASE	39
-FIGURE 4.3 USE CASE DIAGRAM OF LEGALEASE	40
-FIGURE 4.4 CLASS DIAGRAM OF LEGALEASE	41
-FIGURE 4.5 ACTIVITY DIAGRAM OF LEGALEASE	42
-FIGURE 4.6 SEQUENCE DIAGRAM OF LEGALEASE	43
-FIGURE 4.7 COMPONENT DIAGRAM OF LEGALEASE	44
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
- 
-LIST OF TABLES
-TABLE 2.1 COMPARISON OF EXISTING SYSTEMS WITH PROPOSED SYSTEM (LEGALEASE)	20
-TABLE 3.1 USER NEEDS OF SYSTEM	26
-TABLE 3.2 FUNCTIONAL REQUIREMENT 01	27
-TABLE 3.3 FUNCTIONAL REQUIREMENT 02	27
-TABLE 3.4 FUNCTIONAL REQUIREMENT 03	28
-TABLE 3.5 FUNCTIONAL REQUIREMENT 04	28
-TABLE 3.6 FUNCTIONAL REQUIREMENT 05	29
-TABLE 3.7 FUNCTIONAL REQUIREMENT 06	29
-TABLE 3.8 FUNCTIONAL REQUIREMENT 07	30
-TABLE 3.9 FUNCTIONAL REQUIREMENT 08	30
-TABLE 3.10 FUNCTIONAL REQUIREMENT 09	31
-TABLE 3.11 USER NEEDS OF SYSTEM	33
- 
 Chapter 1 
 	INTRODUCTION
 1.1. Background
@@ -474,11 +357,211 @@ Figure 4.7 Component Diagram of LegalEase
 This chapter detailed the architectural and logical design of LegalEase, establishing the blueprint for its development and implementation. The Incremental Software Development Model was selected as the guiding process, allowing for the modular construction of features such as document analysis, summarization, and expert referrals. This approach was chosen to mitigate risks and enable continuous user feedback throughout the development lifecycle, despite potential challenges regarding module integration and dependency management. The chapter further defined the system methodology, visualizing the complete flow from requirement analysis to deployment. To structure the system’s data, an Entity Relationship Diagram (ERD) was designed, mapping the relationships between users, legal documents, templates, and expert resources. Finally, a comprehensive set of Unified Modeling Language (UML) diagrams was presented to specify the system's structure and behavior. The Use Case Diagram outlined user interactions with core modules, while the Class Diagram defined the object-oriented structure and backend logic. The dynamic behavior of the system was illustrated through Activity and Sequence Diagrams, which detailed the logic flow for text, voice, and document inputs. The Component Diagram concluded the design phase by visualizing the high-level organization of the web portal, NLP engine, and database infrastructure. Collectively, these design artifacts provide a robust foundation for the subsequent implementation phase of LegalEase.
 
  
+Chapter 5 
+	DATABASE
+5.1. Database Introduction
+In LegalEase, the database plays a critical role in handling user data, legal documents, generated templates, and interaction history.
+Since LegalEase is an AI-powered legal assistant, it deals with sensitive and structured information such as contracts, user profiles, and analysis results. Therefore, a reliable and secure database system is required to ensure data integrity, scalability, and performance.
+The database supports the following core functionalities:
+	Secure storage of user accounts and authentication data
+	Management of uploaded legal documents and their metadata
+	Storage of AI-generated outputs such as summaries and risk reports
+	Tracking user queries and interaction history
+	Managing expert referrals and system logs
+5.2. Selected Database
+LegalEase uses PostgreSQL as its primary database management system. PostgreSQL is an open-source, object-relational database known for its robustness, extensibility, and strong support for complex queries and data integrity.
+5.2.1. Reasons for Selection of the Database
+The selection of PostgreSQL was based on the following factors:
+	ACID Compliance: Ensures reliable transactions, which is essential for handling sensitive legal data.
+	Advanced Data Types: Supports JSON, arrays, and custom types, useful for storing semi-structured AI outputs.
+	Scalability: Can handle increasing user data and document storage efficiently.
+	Security Features: Provides role-based access control, encryption support, and authentication mechanisms.
+	Integration with Python & Django: Works smoothly with backend technologies used in LegalEase.
+5.2.2. Benefits of the Selected Database
+	High Reliability and Stability: Suitable for production-level systems handling critical data.
+	Efficient Query Processing: Optimized for complex joins and analytical queries required for document tracking.
+	Extensibility: Allows custom functions and extensions for future enhancements.
+	Open Source and Cost Effective: No licensing cost, making it ideal for academic and scalable projects.
+5.2.3. Limitations of the Selected Database
+	Complex Setup for Beginners: Requires proper configuration compared to simpler databases.
+	Resource Intensive: Can consume more memory and CPU under heavy workloads.
+5.3. Database Queries 
+The system uses SQL queries to interact with the PostgreSQL database. Below are some key operations:
+User Registration:
+INSERT INTO users (id, name, email, password_hash)
+VALUES ('uuid-value', 'Ahmed Khan', 'ahmed@email.com', 'hashed_password');
+User Login (lookup):
+SELECT id, name, email, password_hash
+FROM users
+WHERE email = 'ahmed@email.com';
+Create Session (after login):
+INSERT INTO sessions (id, user_id, expires_at)
+VALUES ('session_token', 'user_uuid', NOW() + INTERVAL '168 hours');
+Get Current User from Session:
+SELECT u.id, u.name, u.email
+FROM sessions s
+JOIN users u ON u.id = s.user_id
+WHERE s.id = 'session_token'
+  AND s.expires_at > NOW();
+Create New Chat:
+INSERT INTO chats (id, user_id, title)
+VALUES ('chat_uuid', 'user_uuid', 'New chat');
+Load Chat Messages:
+SELECT id, role, content, language, created_at
+FROM messages
+WHERE chat_id = 'chat_uuid'
+ORDER BY created_at ASC;
+Store User + Assistant Messages:
+INSERT INTO messages (id, chat_id, role, content, language)
+VALUES ('msg_uuid', 'chat_uuid', 'user', 'User question', 'en');
+
+INSERT INTO messages (id, chat_id, role, content, language)
+VALUES ('msg_uuid_2', 'chat_uuid', 'assistant', 'Assistant response', 'en');
+5.4. Database Tables
+The LegalEase database consists of the following core tables:
+
+1.	Users Table (users)
+id (PK)
+name
+email (unique, indexed)
+password_hash
+created_at
+
+2.	Sessions Table (sessions)
+id (PK)
+user_id (FK → users.id, indexed)
+created_at
+expires_at
+
+3.	Chats Table (chats)
+id (PK)
+user_id (FK → users.id, indexed)
+title
+created_at
+updated_at
+
+4.	Messages Table (messages)
+id (PK)
+chat_id (FK → chats.id, indexed)
+role (user/assistant)
+content
+language
+created_at
+5.	Document Badges Table (document_badges)
+id (PK)
+user_id (FK → users.id, indexed)
+title
+created_at
+5.5. Database Schema Diagram
+5.6. Chapter Summary
+This chapter presented the database design and implementation for LegalEase. It introduced the role of databases in managing structured legal data and justified the selection of PostgreSQL as the primary database system.
+The chapter also outlined key SQL queries used for system operations, defined the core database tables, and explained the relationships between different entities. The designed schema ensures data integrity, scalability, and security, which are essential for handling sensitive legal information.
+Overall, the database serves as the backbone of LegalEase, enabling efficient data management and supporting AI-driven legal functionalities.
+
+ 
+Chapter 6 
+	DEVELOPMENT AND IMPLEMENTATION
+6.1. Development of LegalEase
+The development of LegalEase involved building a full-stack web-based application that integrates Artificial Intelligence, Natural Language Processing (NLP), and database management to provide automated legal assistance.
+The system was developed using a modular approach following the Incremental Software Development Model defined in Chapter 4. Each module—such as authentication, document processing, AI analysis, and database management—was implemented and tested independently before integration.
+The development process included:
+	Backend development for handling business logic and AI processing
+	Frontend development for user interaction and visualization
+	Integration of NLP models for document analysis and summarization
+	Database implementation using PostgreSQL
+	API integration between frontend, backend, and AI modules
+6.2. Implementation Strategy\
+The implementation of LegalEase followed a structured and incremental approach, beginning with data preparation and progressing toward full system integration. Since the system relies heavily on AI and NLP, the first step focused on building a reliable dataset before developing the application modules.
+Phase 1: Dataset Creation and Preparation
+The initial phase involved creating and preparing a dataset of legal documents relevant to Pakistani civil and commercial law. Due to the limited availability of structured local datasets, data was collected from multiple sources.
+The collected data was cleaned, formatted, and organized to remove inconsistencies and irrelevant content. Additionally, preprocessing techniques such as tokenization and normalization were applied to make the data suitable for NLP processing.
+Phase 2: Backend Development
+After dataset preparation, the backend of the system was developed to handle:
+	User authentication and session management
+	Document upload and storage
+	API creation for communication with AI modules
+The backend was implemented using Python-based frameworks, ensuring scalability and modularity.
+Phase 3: AI and NLP Integration
+In this phase, Natural Language Processing techniques and Large Language Models (LLMs) were integrated into the system. The prepared dataset was used to:
+	Improve document understanding
+	Enable clause detection and risk identification
+	Generate summaries in Urdu and English
+Phase 4: Frontend Development
+The user interface was developed to provide a smooth and accessible experience. It includes:
+	Document upload interface
+	AI chat interface
+	Display of analysis results
+The interface was designed to be simple and bilingual, ensuring usability for a wide range of users.
+Phase 5: System Integration
+All modules (frontend, backend, database, and AI components) were integrated to function as a complete system. APIs were used to ensure seamless communication between different components.
+Phase 6: Testing and Deployment
+Finally, the system was tested to ensure:
+
+	Correct functionality of all features
+	Accuracy of AI outputs
+	System performance and responsiveness
+After testing, the system was deployed on a local or cloud environment for user access.
+6.3. Tools Selection
+6.3.1. Hardware
+The development and execution of LegalEase required the following hardware:
+	Multi-core processor system
+	Minimum 16 GB RAM for NLP processing
+	Storage for datasets and uploaded documents
+	Internet connectivity for model access and updates
+6.3.2. Software
+The software tools used in development include:
+	Programming Language: Python
+	Web API: FastAPI
+	Backend Framework: Django / Flask
+	Frontend: HTML, CSS, JavaScript, React
+	Database: SQLAlchemy ORM with PostgreSQL
+	AI/NLP Libraries:
+o	Hugging Face Transformers
+o	spaCy / NLTK
+	Voice Processing: Not Implemented Yet
+	Version Control: Git & GitHub
+These tools were selected for their compatibility, scalability, and strong community support.
+6.4. Coding
+6.5. User Interface
+6.5.1. Description
+6.5.2. Interface Screenshots
+6.6. Program Deployment
+6.7. Chapter Summary
+
+
+
+
+
+
+
+
+
+
+
+ 
+Chapter 7 
+	TESTING
+7.1. Introduction
+7.2. Testing Methods 
+7.3. Comparison
+7.4. Software Evaluation
+7.4.1. Testing Strategy 
+7.4.2. Test Plans
+7.4.3. Test Cases
+7.4.4. Test Report
+7.5. Chapter Summary
+
+
+
+
+
+
+
+
+ 
 REFERENCES
 
 [1] 	J. Devlin, M.-W. Chang, K. Lee and K. Toutanova, “BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding,” in Proceedings of the NAACL, Minneapolis, MN, 2019. 
 [2] 	R. Susskind, Tomorrow’s Lawyers: An Introduction to Your Future, Oxford: Oxford University Press, 2013. 
 [3] 	Pakistan, Law and Justice Commission of, “Judicial Statistics of Pakistan 2024,” Law & Justice Commission of Pakistan, Islamabad, 2024.
 [4] 	K. Khan, W. Khan and A. Khan, “Urdu Sentiment Analysis Using Supervised Machine Learning Approach,” International Journal of Pattern Recognition and Artificial Intelligence, vol. 32, no. 01, 2021. 
-
-
