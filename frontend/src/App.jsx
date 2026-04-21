@@ -260,6 +260,21 @@ const truncateTitle = (title, maxLength = 28) => {
   return `${value.slice(0, Math.max(0, maxLength - 3))}...`;
 };
 
+const findGeneratedDocumentMessage = (chatMessages, title) => {
+  if (!Array.isArray(chatMessages) || !title) return null;
+  const target = `Generate document: ${title}`;
+  for (let index = chatMessages.length - 1; index >= 0; index -= 1) {
+    const message = chatMessages[index];
+    if (message.role === "user" && message.content === target) {
+      const next = chatMessages[index + 1];
+      if (next && next.role === "assistant") {
+        return next;
+      }
+    }
+  }
+  return null;
+};
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [authView, setAuthView] = useState("login");
@@ -279,6 +294,7 @@ export default function App() {
   const [exampleIndex, setExampleIndex] = useState(0);
   const [abortController, setAbortController] = useState(null);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewMode, setReviewMode] = useState("summary");
   const [reviewFile, setReviewFile] = useState(null);
   const [reviewError, setReviewError] = useState("");
   const [reviewResult, setReviewResult] = useState(null);
@@ -298,11 +314,20 @@ export default function App() {
   const [lastGenerated, setLastGenerated] = useState(null);
   const [editedDocument, setEditedDocument] = useState("");
   const [generatorView, setGeneratorView] = useState(false);
+  const [riskView, setRiskView] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
   const [generatedDocsByChat, setGeneratedDocsByChat] = useState({});
   const [editedDocsByChat, setEditedDocsByChat] = useState({});
   const [generatedDocs, setGeneratedDocs] = useState([]);
   const editorRef = useRef(null);
+
+  const userInitials = useMemo(() => {
+    if (!user?.name) return "LE";
+    return user.name.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+  }, [user]);
+
+  const isFullWidthField = (field) =>
+    /purpose|description|scope|details|notes|consideration/i.test(`${field?.label || ""} ${field?.key || ""}`);
 
   const canSubmit = useMemo(() => query.trim().length >= 3 && !loading, [query, loading]);
   const selectedTemplate = useMemo(
@@ -408,7 +433,7 @@ export default function App() {
     }
   };
 
-  const selectChat = async (chatId) => {
+  const selectChat = async (chatId, options = {}) => {
     try {
       const data = await requestJson(`/chats/${chatId}`);
       setActiveChatId(chatId);
@@ -418,6 +443,30 @@ export default function App() {
       setShowTranslations(false);
       setTranslatedMessages({});
       setTranslationError("");
+      setRiskView(false);
+      if (options.openDocumentTitle) {
+        const matched = findGeneratedDocumentMessage(data.messages || [], options.openDocumentTitle);
+        if (matched) {
+          const docPayload = {
+            title: options.openDocumentTitle,
+            content: matched.content,
+            filename: null,
+            pdfBase64: null
+          };
+          setLastGenerated(docPayload);
+          setEditedDocument(matched.content || "");
+          setGeneratorView(true);
+          setShowEditor(true);
+          setTemplateError("");
+        } else {
+          setLastGenerated(null);
+          setEditedDocument("");
+          setGeneratorView(true);
+          setShowEditor(false);
+          setTemplateError("Unable to load this document from the chat history yet.");
+        }
+        return;
+      }
       const storedDoc = generatedDocsByChat[chatId];
       if (storedDoc) {
         const storedEdit = editedDocsByChat[chatId] || storedDoc.content || "";
@@ -438,7 +487,27 @@ export default function App() {
     }
   };
 
+  const handleOpenDocumentBadge = async (doc) => {
+    if (!doc?.chat_id) {
+      setLastGenerated(null);
+      setEditedDocument("");
+      setGeneratorView(true);
+      setRiskView(false);
+      setShowEditor(false);
+      setTemplateError("This document is not linked to a chat yet.");
+      return;
+    }
+    try {
+      await selectChat(doc.chat_id, { openDocumentTitle: doc.title });
+    } catch (err) {
+      setError(err.message || "Unable to open this document.");
+    }
+  };
+
   const startNewChat = async () => {
+    setGeneratorView(false);
+    setRiskView(false);
+    setShowEditor(false);
     try {
       const data = await requestJson("/chats", {
         method: "POST",
@@ -508,7 +577,9 @@ export default function App() {
         body: JSON.stringify(payload)
       });
       setUser(data.user);
+      await loadTemplates();
       await loadChats();
+      await loadDocumentBadges();
     } catch (err) {
       const message = err.message || "Authentication failed.";
       if (message.includes("Invalid credentials")) {
@@ -648,6 +719,8 @@ export default function App() {
   };
 
   const handleExample = () => {
+    setGeneratorView(false);
+    setRiskView(false);
     const nextIndex = (exampleIndex + 1) % EXAMPLES.length;
     const nextPrompt = EXAMPLES[nextIndex].prompt;
     setExampleIndex(nextIndex);
@@ -663,6 +736,8 @@ export default function App() {
   };
 
   const handleExampleSelect = (prompt) => {
+    setGeneratorView(false);
+    setRiskView(false);
     setQuery(prompt);
     setError("");
     setSources([]);
@@ -760,6 +835,7 @@ export default function App() {
       setEditedDocsByChat((prev) => ({ ...prev, [chatId]: data.content || "" }));
       setEditedDocument(data.content || "");
       setGeneratorView(true);
+      setRiskView(false);
       setShowEditor(true);
       await loadDocumentBadges();
     } catch (err) {
@@ -845,7 +921,8 @@ export default function App() {
     }
   };
 
-  const openReviewModal = () => {
+  const openReviewModal = (mode = "summary") => {
+    setReviewMode(mode);
     setReviewOpen(true);
     setReviewError("");
   };
@@ -1041,24 +1118,27 @@ export default function App() {
           <button type="button" className="btn btn-secondary" onClick={handleExample}>
             Try Example [{EXAMPLES[exampleIndex].label}]
           </button>
-          <button type="button" className="btn btn-secondary" onClick={() => setGeneratorView((prev) => !prev)}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              setGeneratorView((prev) => !prev);
+              setRiskView(false);
+            }}
+          >
             {generatorView ? "Back to chat" : "Generate Document"}
           </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              setRiskView((prev) => !prev);
+              setGeneratorView(false);
+            }}
+          >
+            {riskView ? "Back to chat" : "Risk Analyzer"}
+          </button>
         </div>
-        <details className="sidebar__section sidebar__section--documents">
-          <summary className="sidebar__heading sidebar__heading--accordion">Documents</summary>
-          <ul className="document-list">
-            {generatedDocs.map((doc) => (
-              <li key={doc.id}>
-                <div className="document-item">
-                  <span className="document-item__label">Draft ready</span>
-                  <span className="document-item__title">{doc.title}</span>
-                </div>
-              </li>
-            ))}
-            {!generatedDocs.length && <li className="document-list__empty">No documents yet.</li>}
-          </ul>
-        </details>
         <details className="sidebar__section sidebar__section--chats" open>
           <summary className="sidebar__heading sidebar__heading--accordion">Chats</summary>
           <div className="chat-list__scroll">
@@ -1124,6 +1204,9 @@ export default function App() {
           <div className="topbar__brand">
             <span className="topbar__brand-text">LegalEase</span>
           </div>
+          <span className="topbar__badge">
+            {generatorView ? "Document generator" : riskView ? "Risk analyzer" : "Legal assistant"}
+          </span>
         </header>
 
         {generatorView ? (
@@ -1158,20 +1241,25 @@ export default function App() {
                             ))}
                           </select>
                         </label>
-                        {selectedTemplate?.fields?.map((field) => (
-                          <label key={field.key} className="generator__field">
-                            <span>
-                              {field.label}
-                              {field.required ? " *" : ""}
-                            </span>
-                            <input
-                              type="text"
-                              value={templateFields[field.key] || ""}
-                              onChange={(event) => handleTemplateFieldChange(field.key, event.target.value)}
-                              placeholder={field.placeholder || ""}
-                            />
-                          </label>
-                        ))}
+                        <div className="generator__grid">
+                          {selectedTemplate?.fields?.map((field) => (
+                            <label
+                              key={field.key}
+                              className={`generator__field ${isFullWidthField(field) ? "generator__field--full" : ""}`}
+                            >
+                              <span>
+                                {field.label}
+                                {field.required ? " *" : ""}
+                              </span>
+                              <input
+                                type="text"
+                                value={templateFields[field.key] || ""}
+                                onChange={(event) => handleTemplateFieldChange(field.key, event.target.value)}
+                                placeholder={field.placeholder || ""}
+                              />
+                            </label>
+                          ))}
+                        </div>
                         <label className="generator__toggle">
                           <input
                             type="checkbox"
@@ -1247,6 +1335,35 @@ export default function App() {
               </div>
             </div>
           </section>
+        ) : riskView ? (
+          <section className="risk-view">
+            <div className="risk-card">
+              <div className="risk-card__header">
+                <div>
+                  <h2>Risk analyzer</h2>
+                  <p className="muted">
+                    Upload a contract to highlight risky clauses, compliance gaps, and key obligations.
+                  </p>
+                </div>
+                <button type="button" className="btn btn-secondary" onClick={() => setRiskView(false)}>
+                  Back to chat
+                </button>
+              </div>
+              <div className="risk-card__panel">
+                <strong>What you get</strong>
+                <ul className="review-bullets">
+                  <li>Risk severity tags with explanations.</li>
+                  <li>Compliance issues mapped to relevant laws.</li>
+                  <li>Plain-language summary for quick review.</li>
+                </ul>
+              </div>
+              <div className="risk-card__actions">
+                <button type="button" className="btn btn-primary" onClick={() => openReviewModal("review")}>
+                  Upload for review
+                </button>
+              </div>
+            </div>
+          </section>
         ) : (
           <section className="chat-window">
             <div className="chat-messages">
@@ -1260,6 +1377,9 @@ export default function App() {
                     key={message.id}
                     className={`message-row ${message.role === "user" ? "is-user" : "is-assistant"} ${displayLanguage === "ur" ? "is-urdu" : ""}`}
                   >
+                    <div className="message-avatar">
+                      {message.role === "user" ? userInitials : "LE"}
+                    </div>
                     <div className="message-card">
                       {message.role === "assistant" ? renderMessageContent(displayContent) : <p>{displayContent}</p>}
                       {message.referral && (
@@ -1290,6 +1410,7 @@ export default function App() {
               })}
               {loading && (
                 <div className="message-row is-assistant">
+                  <div className="message-avatar">LE</div>
                   <div className="message-card is-loading">
                     <p>Thinking…</p>
                   </div>
@@ -1300,8 +1421,8 @@ export default function App() {
 
             <form className="composer" onSubmit={handleSubmit}>
               <div className="composer__actions">
-                <button type="button" className="icon-btn" onClick={openReviewModal} title="Upload documents">
-                  Upload a document/contract for review
+                <button type="button" className="icon-btn" onClick={() => openReviewModal("summary")} title="Upload documents">
+                  Generate a plain-language summary of a legal document
                 </button>
                 <button type="button" className="icon-btn" disabled title="Voice input">
                   Voice
@@ -1317,15 +1438,6 @@ export default function App() {
                 onKeyDown={handleComposerKeyDown}
               />
               <div className="composer__controls">
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={handleTranslateResponses}
-                  disabled={!activeChatId || translatingMessages}
-                >
-                  {showTranslations ? "Show original" : "Translate responses"}
-                </button>
-                {translationError && <span className="error-inline">{translationError}</span>}
                 {loading ? (
                   <button type="button" className="btn btn-secondary" onClick={handleStop}>
                     Stop
@@ -1385,8 +1497,12 @@ export default function App() {
             <div className="modal">
               <div className="modal__header">
                 <div>
-                  <h2>Document review</h2>
-                  <p className="muted">Upload a PDF or DOCX for compliance review or a plain-language summary.</p>
+                  <h2>{reviewMode === "review" ? "Document review" : "Document summary"}</h2>
+                  <p className="muted">
+                    {reviewMode === "review"
+                      ? "Upload a PDF or DOCX for compliance review or a plain-language summary."
+                      : "Upload a PDF or DOCX for a plain-language summary."}
+                  </p>
                 </div>
                 <button type="button" className="modal__close" onClick={closeReviewModal}>Close</button>
               </div>
@@ -1418,14 +1534,16 @@ export default function App() {
                 >
                   {summarizing ? "Summarizing..." : "Summarize document"}
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={handleReviewSubmit}
-                  disabled={!reviewFile || reviewing || summarizing}
-                >
-                  {reviewing ? "Reviewing..." : "Review document"}
-                </button>
+                {reviewMode === "review" && (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={handleReviewSubmit}
+                    disabled={!reviewFile || reviewing || summarizing}
+                  >
+                    {reviewing ? "Reviewing..." : "Review document"}
+                  </button>
+                )}
               </div>
             </div>
           </div>

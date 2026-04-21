@@ -315,6 +315,7 @@ class DocumentBadgeResponse(BaseModel):
     id: str
     title: str
     created_at: datetime
+    chat_id: Optional[str] = None
 
 
 def _contains_urdu(text: str) -> bool:
@@ -561,6 +562,7 @@ def _serialize_document_badge(badge: DocumentBadge) -> DocumentBadgeResponse:
         id=badge.id,
         title=badge.title,
         created_at=badge.created_at,
+        chat_id=badge.chat_id,
     )
 
 
@@ -843,11 +845,11 @@ async def generate_document(
         if chat.title == "New chat":
             chat.title = title[:60]
         chat.updated_at = datetime.utcnow()
-        badge = DocumentBadge(user_id=current_user.id, title=title)
+        badge = DocumentBadge(user_id=current_user.id, title=title, chat_id=request.chat_id)
         db.add_all([user_message, assistant_message, chat, badge])
         db.commit()
     else:
-        badge = DocumentBadge(user_id=current_user.id, title=title)
+        badge = DocumentBadge(user_id=current_user.id, title=title, chat_id=request.chat_id)
         db.add(badge)
         db.commit()
 
