@@ -1,9 +1,7 @@
-@import url("https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Source+Serif+4:wght@400;500;600&family=Noto+Nastaliq+Urdu:wght@400;600&family=Poppins:wght@500;600;700&display=swap");
-
 :root {
   color-scheme: light;
-  --heading-font: "Poppins", "Space Grotesk", "Segoe UI", sans-serif;
-  --body-font: "Source Serif 4", "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+  --heading-font: "Segoe UI", "Arial", "Helvetica", sans-serif;
+  --body-font: "Georgia", "Times New Roman", serif;
   font-family: var(--body-font);
   background: #f8fafc;
   color: #0f172a;
@@ -64,15 +62,15 @@ button {
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: 16px 14px;
-  gap: 16px;
+  padding: 14px 12px;
+  gap: 12px;
   min-height: 0;
   box-shadow: var(--shadow-sm);
 }
 
 .sidebar__top {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .sidebar__section {
@@ -257,7 +255,7 @@ details[open] > .sidebar__heading--accordion::after {
 
 .generator-card__header h2 {
   margin: 0 0 6px;
-  font-family: "Playfair Display", "Source Serif 4", serif;
+  font-family: var(--heading-font);
 }
 
 .generator__actions {
@@ -335,7 +333,7 @@ details[open] > .sidebar__heading--accordion::after {
   scroll-behavior: smooth;
   flex: 1 1 0;
   min-height: 0;
-  max-height: clamp(140px, calc(100vh - 430px), 420px);
+  max-height: clamp(180px, calc(100vh - 340px), 520px);
 }
 
 .document-list {
@@ -359,6 +357,16 @@ details[open] > .sidebar__heading--accordion::after {
   width: 100%;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.document-item.is-static {
+  cursor: default;
+}
+
+.document-item.is-static:hover {
+  transform: none;
+  border-color: rgba(37, 99, 235, 0.28);
+  background: rgba(37, 99, 235, 0.08);
 }
 
 .document-item:hover {
@@ -716,11 +724,12 @@ details[open] > .sidebar__heading--accordion::after {
 .message-row {
   display: flex;
   align-items: flex-end;
-  gap: 10px;
+  gap: 8px;
 }
 
 .message-row.is-user {
   justify-content: flex-end;
+  flex-direction: row-reverse;
 }
 
 .message-avatar {
@@ -759,10 +768,8 @@ details[open] > .sidebar__heading--accordion::after {
   background: rgba(37, 99, 235, 0.12);
   border-color: rgba(37, 99, 235, 0.32);
   border-left: 3px solid rgba(37, 99, 235, 0.55);
-}
-
-.message-row.is-user {
-  flex-direction: row-reverse;
+  text-align: right;
+  margin-left: auto;
 }
 
 .message-card p {
@@ -834,8 +841,43 @@ details[open] > .sidebar__heading--accordion::after {
 }
 
 .message-row.is-urdu .message-card {
-  font-family: "Noto Nastaliq Urdu", "Noto Naskh Arabic", serif;
+  font-family: "Noto Nastaliq Urdu", "Noto Naskh Arabic", "Segoe UI", serif;
   direction: rtl;
+  text-align: right;
+}
+
+.message-row:not(.is-urdu) .message-card {
+  direction: ltr;
+  text-align: left;
+}
+
+.message-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.message-action-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.message-action-btn:hover {
+  color: var(--text);
+  border-color: rgba(37, 99, 235, 0.4);
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.message-action-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .message-card.is-loading {
@@ -845,10 +887,10 @@ details[open] > .sidebar__heading--accordion::after {
 
 .composer {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   background: var(--surface-strong);
-  border-radius: 14px;
-  padding: 8px 12px;
+  border-radius: 12px;
+  padding: 6px 10px;
   border: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
 }
@@ -862,13 +904,13 @@ details[open] > .sidebar__heading--accordion::after {
 .composer textarea {
   width: 100%;
   border: none;
-  border-radius: 10px;
-  padding: 4px 0;
+  border-radius: 8px;
+  padding: 3px 0;
   background: transparent;
   color: var(--text);
   font-size: 14px;
   resize: none;
-  min-height: 26px;
+  min-height: 22px;
 }
 
 .composer textarea:focus {
@@ -902,6 +944,12 @@ details[open] > .sidebar__heading--accordion::after {
 .icon-btn:disabled {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+.icon-btn.is-recording {
+  background: rgba(185, 28, 28, 0.12);
+  border-color: rgba(185, 28, 28, 0.45);
+  color: #7a1f1f;
 }
 
 .btn {
@@ -1179,7 +1227,7 @@ details[open] > .sidebar__heading--accordion::after {
 
 .modal__header h2 {
   margin: 0 0 6px;
-  font-family: "Playfair Display", "Source Serif 4", serif;
+  font-family: var(--heading-font);
 }
 
 .modal__close {

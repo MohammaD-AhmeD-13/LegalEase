@@ -141,28 +141,9 @@ const formatReviewMessage = (filename, review) => {
 };
 
 const ensureSummaryHeading = (summary) => {
-  const trimmed = (summary || "").trim();
-  if (!trimmed) {
-    return "Summary:\nNo summary returned.";
-  }
-  const lines = trimmed.split("\n").map((line) => line.trim());
-  const cleanedLines = [];
-  let summarySeen = false;
-  for (const line of lines) {
-    if (/^summary:\s*$/i.test(line)) {
-      if (summarySeen) {
-        continue;
-      }
-      summarySeen = true;
-      cleanedLines.push("Summary:");
-      continue;
-    }
-    cleanedLines.push(line);
-  }
-  if (!summarySeen) {
-    return `Summary:\n${cleanedLines.join("\n").trim()}`;
-  }
-  return cleanedLines.join("\n").trim();
+  return (summary || "")
+    .replace(/(^|\n)\s*summary:\s*/gi, "$1") // remove ALL "Summary:"
+    .trim();
 };
 
 const formatSummaryMessage = (summary) => ensureSummaryHeading(summary);
@@ -301,9 +282,14 @@ export default function App() {
   const [reviewing, setReviewing] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
   const [translatedMessages, setTranslatedMessages] = useState({});
-  const [showTranslations, setShowTranslations] = useState(false);
+  const [translatedVisible, setTranslatedVisible] = useState({});
   const [translatingMessages, setTranslatingMessages] = useState(false);
   const [translationError, setTranslationError] = useState("");
+  const [translationTargetId, setTranslationTargetId] = useState(null);
+  const [reviewHistory, setReviewHistory] = useState([]);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [micError, setMicError] = useState("");
 
   const [templates, setTemplates] = useState([]);
   const [templateId, setTemplateId] = useState("");
@@ -320,6 +306,10 @@ export default function App() {
   const [editedDocsByChat, setEditedDocsByChat] = useState({});
   const [generatedDocs, setGeneratedDocs] = useState([]);
   const editorRef = useRef(null);
+  const reviewFileInputRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const activeStreamRef = useRef(null);
 
   const userInitials = useMemo(() => {
     if (!user?.name) return "LE";
@@ -328,6 +318,52 @@ export default function App() {
 
   const isFullWidthField = (field) =>
     /purpose|description|scope|details|notes|consideration/i.test(`${field?.label || ""} ${field?.key || ""}`);
+
+  const isEffectiveDateField = (field) =>
+    /effective date|effective_date|start date/i.test(`${field?.label || ""} ${field?.key || ""}`);
+
+  const formatEffectiveDatePlaceholder = () =>
+    new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+
+  const sourcesStorageKey = (chatId) => `legalease.sources.${chatId}`;
+  const loadSourcesFromStorage = (chatId) => {
+    if (!chatId) return [];
+    try {
+      const raw = localStorage.getItem(sourcesStorageKey(chatId));
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const saveSourcesToStorage = (chatId, nextSources) => {
+    if (!chatId) return;
+    try {
+      localStorage.setItem(sourcesStorageKey(chatId), JSON.stringify(nextSources || []));
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  const reviewHistoryStorageKey = (userKey) => `legalease.reviewHistory.${userKey}`;
+  const getReviewHistoryKey = () => user?.email || user?.id || "default";
+  const loadReviewHistoryFromStorage = (userKey) => {
+    if (!userKey) return [];
+    try {
+      const raw = localStorage.getItem(reviewHistoryStorageKey(userKey));
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  };
+  const saveReviewHistoryToStorage = (userKey, history) => {
+    if (!userKey) return;
+    try {
+      localStorage.setItem(reviewHistoryStorageKey(userKey), JSON.stringify(history || []));
+    } catch {
+      // ignore storage errors
+    }
+  };
 
   const canSubmit = useMemo(() => query.trim().length >= 3 && !loading, [query, loading]);
   const selectedTemplate = useMemo(
@@ -354,6 +390,22 @@ export default function App() {
     loadSession();
   }, []);
 
+  useEffect(() => {
+    if (!user?.email && !user?.id) return;
+    const history = loadReviewHistoryFromStorage(getReviewHistoryKey());
+    setReviewHistory(history);
+  }, [user?.email, user?.id]);
+
+  useEffect(() => () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    if (activeStreamRef.current) {
+      activeStreamRef.current.getTracks().forEach((track) => track.stop());
+      activeStreamRef.current = null;
+    }
+  }, []);
+
   const handleAuthFailure = () => {
     setUser(null);
     setChats([]);
@@ -371,9 +423,11 @@ export default function App() {
     setEditedDocsByChat({});
     setGeneratedDocs([]);
     setTranslatedMessages({});
-    setShowTranslations(false);
+    setTranslatedVisible({});
     setTranslatingMessages(false);
     setTranslationError("");
+    setTranslationTargetId(null);
+    setReviewHistory([]);
   };
 
   const initializeTemplateFields = (template) => {
@@ -438,11 +492,12 @@ export default function App() {
       const data = await requestJson(`/chats/${chatId}`);
       setActiveChatId(chatId);
       setMessages(data.messages || []);
-      setSources([]);
+      setSources(loadSourcesFromStorage(chatId));
       setError("");
-      setShowTranslations(false);
       setTranslatedMessages({});
+      setTranslatedVisible({});
       setTranslationError("");
+      setTranslationTargetId(null);
       setRiskView(false);
       if (options.openDocumentTitle) {
         const matched = findGeneratedDocumentMessage(data.messages || [], options.openDocumentTitle);
@@ -604,6 +659,14 @@ export default function App() {
     }
     const trimmed = query.trim();
     if (loading) return;
+    if (isRecording) {
+      setError("Stop recording before sending your message.");
+      return;
+    }
+    if (isTranscribing) {
+      setError("Wait for transcription to finish.");
+      return;
+    }
     if (trimmed.length < 3) {
       setError("Please enter at least 3 characters.");
       return;
@@ -613,13 +676,16 @@ export default function App() {
       role: "user",
       content: trimmed
     };
-    setMessages((prev) => [...prev, userMessage]);
+   setMessages((prev) => {
+  return [...prev, userMessage, assistantMessage];
+});
     setQuery("");
     setError("");
     setSources([]);
-    setShowTranslations(false);
     setTranslatedMessages({});
+    setTranslatedVisible({});
     setTranslationError("");
+    setTranslationTargetId(null);
 
     let chatId = activeChatId;
     if (!chatId) {
@@ -661,11 +727,12 @@ export default function App() {
         id: createTempId(),
         role: "assistant",
         content: data.answer || "",
-        language: data.language || language,
+        language: "en",
         referral: data.needs_referral ? data.referral_expert : null
       };
       setMessages((prev) => [...prev, assistantMessage]);
       setSources(data.sources || []);
+      saveSourcesToStorage(chatId, data.sources || []);
       updateChatTitle(chatId, data.chat_title);
     } catch (err) {
       if (err.name === "AuthError") {
@@ -687,32 +754,143 @@ export default function App() {
     }
   };
 
-  const handleTranslateResponses = async () => {
-    if (!activeChatId || translatingMessages) return;
-    if (showTranslations) {
-      setShowTranslations(false);
+  const cleanupRecorder = () => {
+    if (activeStreamRef.current) {
+      activeStreamRef.current.getTracks().forEach((track) => track.stop());
+      activeStreamRef.current = null;
+    }
+    mediaRecorderRef.current = null;
+    audioChunksRef.current = [];
+  };
+
+  const transcribeAudioBlob = async (blob) => {
+    if (!blob || blob.size === 0) {
+      setMicError("No audio captured. Please try again.");
       return;
     }
-    setTranslatingMessages(true);
-    setTranslationError("");
+    setIsTranscribing(true);
+    setMicError("");
+    setError("");
     try {
-      const data = await requestJson(`/chats/${activeChatId}/translate?target=ur`, {
-        method: "POST"
+      const formData = new FormData();
+      formData.append("audio", blob, "voice-note.webm");
+      formData.append("input_language", "auto");
+      formData.append("output_language", language);
+      const data = await requestForm("/audio/transcribe", formData);
+      const text = String(data?.text || "").trim();
+      if (!text) {
+        setMicError("No speech detected. Please speak clearly and try again.");
+        return;
+      }
+      setQuery((prev) => {
+        const prefix = prev.trim() ? `${prev.trim()} ` : "";
+        return `${prefix}${text}`;
       });
-      const map = {};
-      (data.messages || []).forEach((item) => {
-        if (item.translated_content) {
-          map[item.id] = item.translated_content;
-        }
-      });
-      setTranslatedMessages(map);
-      setShowTranslations(true);
     } catch (err) {
       if (err.name === "AuthError") {
         handleAuthFailure();
         return;
       }
-      setTranslationError(err.message || "Unable to translate responses.");
+      const detail = err.message || "Unable to transcribe audio right now.";
+      setMicError(detail);
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  const handleVoiceInput = async () => {
+    if (isTranscribing || loading) return;
+
+    if (isRecording) {
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        recorder.stop();
+      }
+      setIsRecording(false);
+      return;
+    }
+
+    if (!navigator?.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setMicError("Microphone recording is not supported in this browser.");
+      return;
+    }
+
+    try {
+      setMicError("");
+      setError("");
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      activeStreamRef.current = stream;
+      const preferredTypes = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+      const mimeType = preferredTypes.find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onerror = () => {
+        setMicError("A recording error occurred. Please try again.");
+        setIsRecording(false);
+        cleanupRecorder();
+      };
+
+      recorder.onstop = async () => {
+        const type = recorder.mimeType || "audio/webm";
+        const blob = new Blob(audioChunksRef.current, { type });
+        cleanupRecorder();
+        await transcribeAudioBlob(blob);
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecording(true);
+    } catch (err) {
+      const raw = (err?.name || err?.message || "").toString();
+      if (/NotAllowedError|Permission/i.test(raw)) {
+        setMicError("Microphone access was blocked. Enable it and try again.");
+      } else {
+        setMicError("Unable to access your microphone.");
+      }
+      setIsRecording(false);
+      cleanupRecorder();
+    }
+  };
+
+  const handleTranslateMessage = async (messageId) => {
+    if (!activeChatId || translatingMessages) return;
+    if (translatedVisible[messageId]) {
+      setTranslatedVisible((prev) => ({ ...prev, [messageId]: false }));
+      return;
+    }
+    if (translatedMessages[messageId]) {
+      setTranslatedVisible((prev) => ({ ...prev, [messageId]: true }));
+      return;
+    }
+    setTranslatingMessages(true);
+    setTranslationError("");
+    setTranslationTargetId(messageId);
+    try {
+      const data = await requestJson(`/chats/${activeChatId}/translate?target=ur`, {
+        method: "POST"
+      });
+      const map = {};
+      (data.messages || []).forEach((item, index) => {
+  const msg = messages[index];
+  if (msg && item.translated_content) {
+    map[msg.id] = item.translated_content;
+  }
+});
+      setTranslatedMessages((prev) => ({ ...prev, ...map }));
+      setTranslatedVisible((prev) => ({ ...prev, [messageId]: true }));
+    } catch (err) {
+      if (err.name === "AuthError") {
+        handleAuthFailure();
+        return;
+      }
+      setTranslationError(err.message || "Unable to translate this response.");
     } finally {
       setTranslatingMessages(false);
     }
@@ -953,14 +1131,15 @@ export default function App() {
     setReviewFile(file);
   };
 
-  const handleReviewSubmit = async () => {
-    if (!reviewFile || reviewing) return;
+  const submitReview = async (file) => {
+    if (!file || reviewing) return;
     setReviewError("");
     setReviewing(true);
+    setReviewFile(file);
 
     try {
       const formData = new FormData();
-      formData.append("file", reviewFile);
+      formData.append("file", file);
       if (activeChatId) {
         formData.append("chat_id", activeChatId);
       }
@@ -969,17 +1148,25 @@ export default function App() {
       const userMessage = {
         id: createTempId(),
         role: "user",
-        content: `Uploaded document: ${reviewFile.name}`
+        content: `Uploaded document: ${file.name}`
       };
       const assistantMessage = {
         id: createTempId(),
         role: "assistant",
-        content: formatReviewMessage(reviewFile.name, data)
+        content: formatReviewMessage(file.name, data)
       };
       setMessages((prev) => [...prev, userMessage, assistantMessage]);
       if (activeChatId) {
-        updateChatTitle(activeChatId, `Document Review: ${reviewFile.name}`);
+        updateChatTitle(activeChatId, `Document Review: ${file.name}`);
       }
+      const entry = {
+        id: createTempId(),
+        name: file.name,
+        created_at: new Date().toISOString()
+      };
+      const nextHistory = [entry, ...reviewHistory].slice(0, 20);
+      setReviewHistory(nextHistory);
+      saveReviewHistoryToStorage(getReviewHistoryKey(), nextHistory);
       setReviewOpen(false);
       setReviewFile(null);
       setReviewError("");
@@ -992,6 +1179,21 @@ export default function App() {
     } finally {
       setReviewing(false);
     }
+  };
+
+  const handleReviewSubmit = async () => submitReview(reviewFile);
+
+  const handleReviewFileChangeForReview = (event) => {
+    const file = event.target.files?.[0] || null;
+    event.target.value = "";
+    setReviewResult(null);
+    if (!file) return;
+    const lowerName = file.name.toLowerCase();
+    if (!lowerName.endsWith(".pdf") && !lowerName.endsWith(".docx")) {
+      setReviewError("Only PDF and DOCX files are supported.");
+      return;
+    }
+    submitReview(file);
   };
 
   const handleSummarySubmit = async () => {
@@ -1134,12 +1336,50 @@ export default function App() {
             onClick={() => {
               setRiskView((prev) => !prev);
               setGeneratorView(false);
+              setReviewError("");
             }}
           >
             {riskView ? "Back to chat" : "Risk Analyzer"}
           </button>
         </div>
-        <details className="sidebar__section sidebar__section--chats" open>
+        {generatorView && (
+          <details className="sidebar__section sidebar__section--documents" open>
+            <summary className="sidebar__heading sidebar__heading--accordion">Documents</summary>
+            <ul className="document-list">
+              {generatedDocs.map((doc) => (
+                <li key={doc.id}>
+                  <button
+                    type="button"
+                    className="document-item"
+                    onClick={() => handleOpenDocumentBadge(doc)}
+                  >
+                    <span className="document-item__label">Draft ready</span>
+                    <span className="document-item__title">{doc.title}</span>
+                  </button>
+                </li>
+              ))}
+              {!generatedDocs.length && <li className="document-list__empty">No documents yet.</li>}
+            </ul>
+          </details>
+        )}
+        {riskView && (
+          <details className="sidebar__section sidebar__section--reviews" open>
+            <summary className="sidebar__heading sidebar__heading--accordion">Reviews</summary>
+            <ul className="document-list">
+              {reviewHistory.map((item) => (
+                <li key={item.id}>
+                  <div className="document-item is-static">
+                    <span className="document-item__label">Reviewed</span>
+                    <span className="document-item__title">{item.name}</span>
+                    <span className="chat-list__time">{formatTimestamp(item.created_at)}</span>
+                  </div>
+                </li>
+              ))}
+              {!reviewHistory.length && <li className="document-list__empty">No reviews yet.</li>}
+            </ul>
+          </details>
+        )}
+        <details className="sidebar__section sidebar__section--chats" open={!generatorView && !riskView}>
           <summary className="sidebar__heading sidebar__heading--accordion">Chats</summary>
           <div className="chat-list__scroll">
             <ul className="chat-list">
@@ -1242,23 +1482,27 @@ export default function App() {
                           </select>
                         </label>
                         <div className="generator__grid">
-                          {selectedTemplate?.fields?.map((field) => (
-                            <label
-                              key={field.key}
-                              className={`generator__field ${isFullWidthField(field) ? "generator__field--full" : ""}`}
-                            >
-                              <span>
-                                {field.label}
-                                {field.required ? " *" : ""}
-                              </span>
-                              <input
-                                type="text"
-                                value={templateFields[field.key] || ""}
-                                onChange={(event) => handleTemplateFieldChange(field.key, event.target.value)}
-                                placeholder={field.placeholder || ""}
-                              />
-                            </label>
-                          ))}
+                          {selectedTemplate?.fields?.map((field) => {
+                            const fieldPlaceholder = field.placeholder
+                              || (isEffectiveDateField(field) ? formatEffectiveDatePlaceholder() : "");
+                            return (
+                              <label
+                                key={field.key}
+                                className={`generator__field ${isFullWidthField(field) ? "generator__field--full" : ""}`}
+                              >
+                                <span>
+                                  {field.label}
+                                  {field.required ? " *" : ""}
+                                </span>
+                                <input
+                                  type="text"
+                                  value={templateFields[field.key] || ""}
+                                  onChange={(event) => handleTemplateFieldChange(field.key, event.target.value)}
+                                  placeholder={fieldPlaceholder}
+                                />
+                              </label>
+                            );
+                          })}
                         </div>
                         <label className="generator__toggle">
                           <input
@@ -1358,10 +1602,23 @@ export default function App() {
                 </ul>
               </div>
               <div className="risk-card__actions">
-                <button type="button" className="btn btn-primary" onClick={() => openReviewModal("review")}>
-                  Upload for review
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => reviewFileInputRef.current?.click()}
+                  disabled={reviewing}
+                >
+                  {reviewing ? "Reviewing..." : "Upload for review"}
                 </button>
+                <input
+                  ref={reviewFileInputRef}
+                  type="file"
+                  accept=".pdf,.docx"
+                  className="sr-only"
+                  onChange={handleReviewFileChangeForReview}
+                />
               </div>
+              {reviewError && <p className="error">{reviewError}</p>}
             </div>
           </section>
         ) : (
@@ -1369,8 +1626,9 @@ export default function App() {
             <div className="chat-messages">
               {!messages.length && !error && <div className="empty-state" />}
               {messages.map((message) => {
-                const translated = showTranslations && translatedMessages[message.id];
-                const displayLanguage = translated ? "ur" : message.language;
+                const translated = translatedVisible[message.id] ? translatedMessages[message.id] : null;
+                const isTranslated = Boolean(translated);
+                const displayLanguage = translated ? "ur" : "en";
                 const displayContent = translated || message.content;
                 return (
                   <div
@@ -1382,6 +1640,21 @@ export default function App() {
                     </div>
                     <div className="message-card">
                       {message.role === "assistant" ? renderMessageContent(displayContent) : <p>{displayContent}</p>}
+                      {message.role === "assistant" && (
+                        <div className="message-actions">
+                          <button
+                            type="button"
+                            className="message-action-btn"
+                            onClick={() => handleTranslateMessage(message.id)}
+                            disabled={translatingMessages || !activeChatId}
+                          >
+                            {isTranslated ? "Show original" : "Translate to Urdu"}
+                          </button>
+                          {translationError && translationTargetId === message.id && (
+                            <span className="error-inline">{translationError}</span>
+                          )}
+                        </div>
+                      )}
                       {message.referral && (
                         <div className="referral-card">
                           <div className="referral-card__header">
@@ -1421,11 +1694,17 @@ export default function App() {
 
             <form className="composer" onSubmit={handleSubmit}>
               <div className="composer__actions">
-                <button type="button" className="icon-btn" onClick={() => openReviewModal("summary")} title="Upload documents">
+                <button type="button" className="icon-btn" onClick={() => openReviewModal("summary")} title="Upload Document">
                   Generate a plain-language summary of a legal document
                 </button>
-                <button type="button" className="icon-btn" disabled title="Voice input">
-                  Voice
+                <button
+                  type="button"
+                  className={isRecording ? "icon-btn is-recording" : "icon-btn"}
+                  onClick={handleVoiceInput}
+                  title="Voice input"
+                  disabled={isTranscribing || loading}
+                >
+                  {isTranscribing ? "Transcribing..." : isRecording ? "Stop recording" : "Voice"}
                 </button>
               </div>
               <label className="sr-only" htmlFor="query">Ask a legal question</label>
@@ -1443,11 +1722,12 @@ export default function App() {
                     Stop
                   </button>
                 ) : (
-                  <button type="button" className="btn btn-primary" onClick={handleSubmit} disabled={loading}>
+                  <button type="button" className="btn btn-primary" onClick={handleSubmit} disabled={loading || isTranscribing || isRecording}>
                     Send
                   </button>
                 )}
               </div>
+              {micError && <p className="error">{micError}</p>}
             </form>
 
             <div className="bottom-panel">

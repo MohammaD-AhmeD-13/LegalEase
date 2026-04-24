@@ -4,4 +4,5 @@ $env:LLM_ENABLED="1"
 $env:LLM_PRELOAD="1"
 $env:RAG_PRELOAD="1"
 $env:LIBRETRANSLATE_URL="http://localhost:5000/translate"
+$env:WHISPER_MODEL="base"
 C:/miniconda3/envs/legalease/python.exe -m uvicorn backend.app.main:app --reload --host localhost --port 8005

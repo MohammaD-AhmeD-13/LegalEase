@@ -32,6 +32,7 @@ from backend.services.ocr_service import extract_text
 from backend.services.retrieval_service import get_retrieval_service
 from backend.services.risk_engine import analyze_risks
 from backend.services.translation_service import translate_to_english, translate_to_urdu, translate_text
+from backend.services.whisper_service import get_whisper_service
 
 try:  # Optional local env loading
     from dotenv import load_dotenv
@@ -318,8 +319,25 @@ class DocumentBadgeResponse(BaseModel):
     chat_id: Optional[str] = None
 
 
+class TranscriptionResponse(BaseModel):
+    text: str
+    detected_language: str
+    output_language: str
+
+
 def _contains_urdu(text: str) -> bool:
     return bool(re.search(r"[\u0600-\u06FF]", text))
+
+
+def _normalize_audio_language(value: str, *, allow_source: bool = False) -> str:
+    cleaned = (value or "").strip().lower()
+    allowed = {"auto", "en", "ur"}
+    if allow_source:
+        allowed.add("source")
+    if cleaned not in allowed:
+        choices = "'auto', 'en', 'ur'" if not allow_source else "'source', 'en', 'ur'"
+        raise HTTPException(status_code=400, detail=f"Language must be one of {choices}")
+    return cleaned
 
 
 
@@ -767,6 +785,62 @@ async def summarize_document(
         db.add_all([user_message, assistant_message, chat])
         db.commit()
     return response
+
+
+@app.post("/audio/transcribe", response_model=TranscriptionResponse)
+async def transcribe_audio(
+    audio: UploadFile = File(...),
+    input_language: str = Form("auto"),
+    output_language: str = Form("source"),
+    current_user: User = Depends(get_current_user),
+):
+    _ = current_user
+    if not audio.filename:
+        raise HTTPException(status_code=400, detail="Audio file is required")
+
+    input_lang = _normalize_audio_language(input_language, allow_source=False)
+    output_lang = _normalize_audio_language(output_language, allow_source=True)
+
+    audio_bytes = await audio.read()
+    _ensure_size_limit(len(audio_bytes))
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded audio is empty")
+
+    try:
+        whisper = get_whisper_service()
+        result = await whisper.transcribe(audio_bytes, input_lang)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Audio transcription failed")
+        detail = f"Audio transcription failed: {type(exc).__name__}"
+        if str(exc):
+            detail = f"{detail}: {exc}"
+        raise HTTPException(status_code=500, detail=detail) from exc
+
+    transcript = (result.get("text") or "").strip()
+    detected = (result.get("detected_language") or "unknown").strip().lower()
+
+    if not transcript:
+        raise HTTPException(status_code=422, detail="No speech detected in the uploaded audio")
+
+    resolved_output = detected if output_lang == "source" else output_lang
+    if resolved_output == "ur" and not _contains_urdu(transcript):
+        translated = translate_to_urdu(transcript)
+        if _contains_urdu(translated):
+            transcript = translated
+    elif resolved_output == "en" and _contains_urdu(transcript):
+        transcript = translate_to_english(transcript)
+    elif resolved_output not in {"en", "ur"}:
+        resolved_output = "en"
+
+    return TranscriptionResponse(
+        text=transcript,
+        detected_language=detected,
+        output_language=resolved_output,
+    )
 
 
 @app.get("/documents/templates", response_model=List[TemplateSummary])
