@@ -289,7 +289,7 @@ class DocumentGenerateRequest(BaseModel):
     template_id: str = Field(..., min_length=2)
     fields: Dict[str, str]
     language: str = Field("en", pattern="^(en|ur)$")
-    polish_with_llm: bool = False
+    polish_with_llm: bool = True
     include_pdf: bool = False
     chat_id: Optional[str] = None
 
@@ -872,16 +872,19 @@ async def generate_document(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if request.polish_with_llm:
-        if not is_llm_enabled():
-            raise HTTPException(status_code=503, detail="LLM is disabled")
-        llm = get_llm_service()
-        polish_prompt = (
-            "Improve clarity and consistency of the document below without adding, removing, or reordering clauses. "
-            "Preserve headings and line breaks. Do not add legal advice. Respond ONLY in English.\n\n"
-            f"Document:\n{content}"
-        )
-        content = await llm.generate(polish_prompt, max_new_tokens=512)
+    if request.polish_with_llm and is_llm_enabled():
+        try:
+            llm = get_llm_service()
+            polish_prompt = (
+                "Improve clarity and consistency of the document below without adding, removing, or reordering clauses. "
+                "Preserve headings and line breaks. Do not add legal advice. Respond ONLY in English.\n\n"
+                f"Document:\n{content}"
+            )
+            polished = await llm.generate(polish_prompt, max_new_tokens=512)
+            if polished and polished.strip():
+                content = polished
+        except Exception:
+            logger.exception("Document polish failed; continuing with the original draft.")
 
     response_language = "en" if request.language == "ur" else request.language
 

@@ -295,7 +295,6 @@ export default function App() {
   const [templateId, setTemplateId] = useState("");
   const [templateFields, setTemplateFields] = useState({});
   const [templateError, setTemplateError] = useState("");
-  const [polishWithLlm, setPolishWithLlm] = useState(false);
   const [generatingDocument, setGeneratingDocument] = useState(false);
   const [lastGenerated, setLastGenerated] = useState(null);
   const [editedDocument, setEditedDocument] = useState("");
@@ -416,7 +415,6 @@ export default function App() {
     setTemplateId("");
     setTemplateFields({});
     setTemplateError("");
-    setPolishWithLlm(false);
     setGeneratingDocument(false);
     setLastGenerated(null);
     setGeneratedDocsByChat({});
@@ -582,6 +580,21 @@ export default function App() {
     }
   };
 
+  const ensureDocumentChatId = async () => {
+    if (activeChatId) {
+      return activeChatId;
+    }
+    const data = await requestJson("/chats", {
+      method: "POST",
+      body: JSON.stringify({ title: "New chat" })
+    });
+    setChats((prev) => [data.chat, ...prev]);
+    setActiveChatId(data.chat.id);
+    setMessages([]);
+    setSources([]);
+    return data.chat.id;
+  };
+
   const updateChatTitle = (chatId, title) => {
     if (!title) return;
     setChats((prev) =>
@@ -676,9 +689,7 @@ export default function App() {
       role: "user",
       content: trimmed
     };
-   setMessages((prev) => {
-  return [...prev, userMessage, assistantMessage];
-});
+    setMessages((prev) => [...prev, userMessage]);
     setQuery("");
     setError("");
     setSources([]);
@@ -989,7 +1000,6 @@ export default function App() {
         template_id: selectedTemplate.id,
         fields: templateFields,
         language,
-        polish_with_llm: polishWithLlm,
         include_pdf: false,
         ...(chatId ? { chat_id: chatId } : {})
       };
@@ -1138,11 +1148,10 @@ export default function App() {
     setReviewFile(file);
 
     try {
+      const chatId = await ensureDocumentChatId();
       const formData = new FormData();
       formData.append("file", file);
-      if (activeChatId) {
-        formData.append("chat_id", activeChatId);
-      }
+      formData.append("chat_id", chatId);
       const data = await requestForm("/documents/review", formData);
       setReviewResult(data);
       const userMessage = {
@@ -1156,9 +1165,7 @@ export default function App() {
         content: formatReviewMessage(file.name, data)
       };
       setMessages((prev) => [...prev, userMessage, assistantMessage]);
-      if (activeChatId) {
-        updateChatTitle(activeChatId, `Document Review: ${file.name}`);
-      }
+      updateChatTitle(chatId, `Document Review: ${file.name}`);
       const entry = {
         id: createTempId(),
         name: file.name,
@@ -1170,6 +1177,8 @@ export default function App() {
       setReviewOpen(false);
       setReviewFile(null);
       setReviewError("");
+      setRiskView(false);
+      setGeneratorView(false);
     } catch (err) {
       if (err.name === "AuthError") {
         handleAuthFailure();
@@ -1202,12 +1211,11 @@ export default function App() {
     setSummarizing(true);
 
     try {
+      const chatId = await ensureDocumentChatId();
       const formData = new FormData();
       formData.append("file", reviewFile);
       formData.append("language", language);
-      if (activeChatId) {
-        formData.append("chat_id", activeChatId);
-      }
+      formData.append("chat_id", chatId);
       const data = await requestForm("/documents/summarize", formData);
       const userMessage = {
         id: createTempId(),
@@ -1221,12 +1229,12 @@ export default function App() {
         language: data.language || language
       };
       setMessages((prev) => [...prev, userMessage, assistantMessage]);
-      if (activeChatId) {
-        updateChatTitle(activeChatId, `Document Summary: ${reviewFile.name}`);
-      }
+      updateChatTitle(chatId, `Document Summary: ${reviewFile.name}`);
       setReviewOpen(false);
       setReviewFile(null);
       setReviewError("");
+      setRiskView(false);
+      setGeneratorView(false);
     } catch (err) {
       if (err.name === "AuthError") {
         handleAuthFailure();
@@ -1314,11 +1322,11 @@ export default function App() {
     <div className="shell">
       <aside className="sidebar">
         <div className="sidebar__top">
-          <button type="button" className="btn btn-primary" onClick={startNewChat}>
+          <button type="button" className="btn btn-secondary" onClick={startNewChat}>
             New chat
           </button>
-          <button type="button" className="btn btn-secondary" onClick={handleExample}>
-            Try Example [{EXAMPLES[exampleIndex].label}]
+          <button type="button" className="btn btn-primary" onClick={() => openReviewModal("summary")}>
+            Summarize Document
           </button>
           <button
             type="button"
@@ -1332,7 +1340,7 @@ export default function App() {
           </button>
           <button
             type="button"
-            className="btn btn-secondary"
+            className="btn btn-tertiary"
             onClick={() => {
               setRiskView((prev) => !prev);
               setGeneratorView(false);
@@ -1442,7 +1450,10 @@ export default function App() {
       <main className="main">
         <header className="topbar">
           <div className="topbar__brand">
-            <span className="topbar__brand-text">LegalEase</span>
+            <span className="topbar__brand-mark" aria-hidden="true">LE</span>
+            <div className="topbar__brand-copy">
+              <span className="topbar__brand-text">LegalEase</span>
+            </div>
           </div>
           <span className="topbar__badge">
             {generatorView ? "Document generator" : riskView ? "Risk analyzer" : "Legal assistant"}
@@ -1498,20 +1509,15 @@ export default function App() {
                                   type="text"
                                   value={templateFields[field.key] || ""}
                                   onChange={(event) => handleTemplateFieldChange(field.key, event.target.value)}
+                                  readOnly={field.key === "governing_law"}
+                                  disabled={field.key === "governing_law"}
+                                  className={field.key === "governing_law" ? "is-locked" : undefined}
                                   placeholder={fieldPlaceholder}
                                 />
                               </label>
                             );
                           })}
                         </div>
-                        <label className="generator__toggle">
-                          <input
-                            type="checkbox"
-                            checked={polishWithLlm}
-                            onChange={(event) => setPolishWithLlm(event.target.checked)}
-                          />
-                          <span>LLM polish</span>
-                        </label>
                         {templateError && <p className="error">{templateError}</p>}
                         <div className="generator__actions generator__actions--form">
                           {activeChatId && generatedDocsByChat[activeChatId] && (
@@ -1694,8 +1700,8 @@ export default function App() {
 
             <form className="composer" onSubmit={handleSubmit}>
               <div className="composer__actions">
-                <button type="button" className="icon-btn" onClick={() => openReviewModal("summary")} title="Upload Document">
-                  Generate a plain-language summary of a legal document
+                <button type="button" className="icon-btn" onClick={handleExample} title="Try example prompt">
+                  Try Example [{EXAMPLES[exampleIndex].label}]
                 </button>
                 <button
                   type="button"
@@ -1731,25 +1737,6 @@ export default function App() {
             </form>
 
             <div className="bottom-panel">
-              <div className="bottom-panel__left">
-                <span className="bottom-panel__label">Response language</span>
-                <div className="segmented" role="group" aria-label="Response language">
-                  <button
-                    type="button"
-                    className={language === "en" ? "segmented__btn is-active" : "segmented__btn"}
-                    onClick={() => setLanguage("en")}
-                  >
-                    English
-                  </button>
-                  <button
-                    type="button"
-                    className={language === "ur" ? "segmented__btn is-active" : "segmented__btn"}
-                    onClick={() => setLanguage("ur")}
-                  >
-                    Urdu
-                  </button>
-                </div>
-              </div>
               <details className="sources-panel">
                 <summary>Sources</summary>
                 {!sources.length && <p className="muted">No sources yet.</p>}
