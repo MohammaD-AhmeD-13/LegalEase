@@ -305,6 +305,7 @@ export default function App() {
   const [editedDocsByChat, setEditedDocsByChat] = useState({});
   const [generatedDocs, setGeneratedDocs] = useState([]);
   const editorRef = useRef(null);
+  const authPanelRef = useRef(null);
   const reviewFileInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -364,6 +365,37 @@ export default function App() {
     }
   };
 
+  const generatedDocsStorageKey = (userKey) => `legalease.generatedDocs.${userKey}`;
+  const getGeneratedDocsKey = () => user?.email || user?.id || "default";
+  const loadGeneratedDocsFromStorage = (userKey) => {
+    if (!userKey) return { generatedDocsByChat: {}, editedDocsByChat: {} };
+    try {
+      const raw = localStorage.getItem(generatedDocsStorageKey(userKey));
+      if (!raw) return { generatedDocsByChat: {}, editedDocsByChat: {} };
+      const parsed = JSON.parse(raw);
+      return {
+        generatedDocsByChat: parsed?.generatedDocsByChat || {},
+        editedDocsByChat: parsed?.editedDocsByChat || {}
+      };
+    } catch {
+      return { generatedDocsByChat: {}, editedDocsByChat: {} };
+    }
+  };
+  const saveGeneratedDocsToStorage = (userKey, generatedDocsMap, editedDocsMap) => {
+    if (!userKey) return;
+    try {
+      localStorage.setItem(
+        generatedDocsStorageKey(userKey),
+        JSON.stringify({
+          generatedDocsByChat: generatedDocsMap || {},
+          editedDocsByChat: editedDocsMap || {}
+        })
+      );
+    } catch {
+      // ignore storage errors
+    }
+  };
+
   const canSubmit = useMemo(() => query.trim().length >= 3 && !loading, [query, loading]);
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === templateId) || null,
@@ -379,6 +411,9 @@ export default function App() {
           return;
         }
         setUser(data.user);
+        const docCache = loadGeneratedDocsFromStorage(data.user?.email || data.user?.id || "default");
+        setGeneratedDocsByChat(docCache.generatedDocsByChat || {});
+        setEditedDocsByChat(docCache.editedDocsByChat || {});
         await loadTemplates();
         await loadChats();
         await loadDocumentBadges();
@@ -495,19 +530,19 @@ export default function App() {
       setTranslatedMessages({});
       setTranslatedVisible({});
       setTranslationError("");
-      setTranslationTargetId(null);
       setRiskView(false);
       if (options.openDocumentTitle) {
-        const matched = findGeneratedDocumentMessage(data.messages || [], options.openDocumentTitle);
+        const storedDoc = generatedDocsByChat[chatId];
+        const matched = storedDoc || findGeneratedDocumentMessage(data.messages || [], options.openDocumentTitle);
         if (matched) {
           const docPayload = {
             title: options.openDocumentTitle,
             content: matched.content,
-            filename: null,
-            pdfBase64: null
+            filename: matched.filename || null,
+            pdfBase64: matched.pdfBase64 || null
           };
           setLastGenerated(docPayload);
-          setEditedDocument(matched.content || "");
+          setEditedDocument(editedDocsByChat[chatId] || matched.content || "");
           setGeneratorView(true);
           setShowEditor(true);
           setTemplateError("");
@@ -580,10 +615,7 @@ export default function App() {
     }
   };
 
-  const ensureDocumentChatId = async () => {
-    if (activeChatId) {
-      return activeChatId;
-    }
+  const createDedicatedDocumentChat = async () => {
     const data = await requestJson("/chats", {
       method: "POST",
       body: JSON.stringify({ title: "New chat" })
@@ -592,6 +624,10 @@ export default function App() {
     setActiveChatId(data.chat.id);
     setMessages([]);
     setSources([]);
+    setTranslatedMessages({});
+    setTranslatedVisible({});
+    setTranslationError("");
+    setTranslationTargetId(null);
     return data.chat.id;
   };
 
@@ -611,6 +647,18 @@ export default function App() {
     try {
       await requestJson(`/chats/${chatId}`, { method: "DELETE" });
       setChats((prev) => prev.filter((item) => item.id !== chatId));
+      setGeneratedDocsByChat((prev) => {
+        const next = { ...prev };
+        delete next[chatId];
+        saveGeneratedDocsToStorage(getGeneratedDocsKey(), next, editedDocsByChat);
+        return next;
+      });
+      setEditedDocsByChat((prev) => {
+        const next = { ...prev };
+        delete next[chatId];
+        saveGeneratedDocsToStorage(getGeneratedDocsKey(), generatedDocsByChat, next);
+        return next;
+      });
       if (activeChatId === chatId) {
         const remaining = chats.filter((item) => item.id !== chatId);
         if (remaining.length) {
@@ -627,6 +675,39 @@ export default function App() {
         return;
       }
       setError(err.message || "Unable to delete this chat.");
+    }
+  };
+
+  const handleDeleteReview = async (reviewId) => {
+    const review = reviewHistory.find((item) => item.id === reviewId);
+    if (!review) return;
+    const confirmed = window.confirm(`Delete review "${review.name}"? This cannot be undone.`);
+    if (!confirmed) return;
+
+    try {
+      const nextHistory = reviewHistory.filter((item) => item.id !== reviewId);
+      setReviewHistory(nextHistory);
+      saveReviewHistoryToStorage(getReviewHistoryKey(), nextHistory);
+    } catch {
+      setReviewError("Unable to delete this review.");
+    }
+  };
+
+  const handleDeleteDocumentBadge = async (docId) => {
+    const doc = generatedDocs.find((item) => item.id === docId);
+    if (!doc) return;
+    const confirmed = window.confirm(`Delete document badge "${doc.title}"? This cannot be undone.`);
+    if (!confirmed) return;
+
+    try {
+      await requestJson(`/documents/badges/${docId}`, { method: "DELETE" });
+      setGeneratedDocs((prev) => prev.filter((item) => item.id !== docId));
+    } catch (err) {
+      if (err.name === "AuthError") {
+        handleAuthFailure();
+        return;
+      }
+      setTemplateError(err.message || "Unable to delete this document badge.");
     }
   };
 
@@ -1021,6 +1102,13 @@ export default function App() {
       setLastGenerated(docPayload);
       setGeneratedDocsByChat((prev) => ({ ...prev, [chatId]: docPayload }));
       setEditedDocsByChat((prev) => ({ ...prev, [chatId]: data.content || "" }));
+      saveGeneratedDocsToStorage(getGeneratedDocsKey(), {
+        ...generatedDocsByChat,
+        [chatId]: docPayload
+      }, {
+        ...editedDocsByChat,
+        [chatId]: data.content || ""
+      });
       setEditedDocument(data.content || "");
       setGeneratorView(true);
       setRiskView(false);
@@ -1060,7 +1148,11 @@ export default function App() {
   const handleEditedDocumentChange = (value) => {
     setEditedDocument(value);
     if (activeChatId) {
-      setEditedDocsByChat((prev) => ({ ...prev, [activeChatId]: value }));
+      setEditedDocsByChat((prev) => {
+        const next = { ...prev, [activeChatId]: value };
+        saveGeneratedDocsToStorage(getGeneratedDocsKey(), generatedDocsByChat, next);
+        return next;
+      });
     }
   };
 
@@ -1148,7 +1240,7 @@ export default function App() {
     setReviewFile(file);
 
     try {
-      const chatId = await ensureDocumentChatId();
+      const chatId = await createDedicatedDocumentChat();
       const formData = new FormData();
       formData.append("file", file);
       formData.append("chat_id", chatId);
@@ -1169,6 +1261,7 @@ export default function App() {
       const entry = {
         id: createTempId(),
         name: file.name,
+        chat_id: chatId,
         created_at: new Date().toISOString()
       };
       const nextHistory = [entry, ...reviewHistory].slice(0, 20);
@@ -1211,7 +1304,7 @@ export default function App() {
     setSummarizing(true);
 
     try {
-      const chatId = await ensureDocumentChatId();
+      const chatId = await createDedicatedDocumentChat();
       const formData = new FormData();
       formData.append("file", reviewFile);
       formData.append("language", language);
@@ -1246,74 +1339,228 @@ export default function App() {
     }
   };
 
+  const focusAuthPanel = (nextView) => {
+    setAuthView(nextView);
+    requestAnimationFrame(() => {
+      const panel = authPanelRef.current;
+      if (!panel) return;
+      panel.scrollIntoView({ behavior: "smooth", block: "center" });
+      const input = panel.querySelector("input");
+      if (input) {
+        setTimeout(() => input.focus(), 220);
+      }
+    });
+  };
+
   if (!user) {
     return (
-      <div className="auth">
-        <div className="auth__panel">
-          <div className="auth__brand">
-            <h1>LegalEase</h1>
+      <div className="auth auth--landing">
+        <header className="auth__nav">
+          <div className="auth__brand auth__brand--nav">
+            <span className="auth__brand-mark">LE</span>
+            <div>
+              <h1>LegalEase</h1>
+              <p>Pakistan-ready legal intelligence</p>
+            </div>
           </div>
-          <div className="auth__tabs">
-            <button
-              type="button"
-              className={authView === "login" ? "tab is-active" : "tab"}
-              onClick={() => setAuthView("login")}
-            >
-              Sign in
-            </button>
-            <button
-              type="button"
-              className={authView === "signup" ? "tab is-active" : "tab"}
-              onClick={() => setAuthView("signup")}
-            >
-              Create account
-            </button>
-          </div>
-          <form className="auth__form" onSubmit={handleAuthSubmit}>
-            {authView === "signup" && (
+          <button
+            type="button"
+            className="btn btn-secondary auth__nav-btn"
+            onClick={() => focusAuthPanel("signup")}
+          >
+            Launch free trial
+          </button>
+        </header>
+
+        <div className="auth__layout">
+          <section className="auth__hero" aria-label="LegalEase platform overview">
+            <span className="auth__kicker">Built for freelancers, startups, and SMEs</span>
+            <h2>
+              Clear legal guidance for Pakistani entrepreneurs who need to move fast and stay protected.
+            </h2>
+            <p>
+              LegalEase combines bilingual legal support, risk-aware contract review, document drafting,
+              and responsible expert referral when a human lawyer is truly needed.
+            </p>
+            <div className="auth__hero-actions">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => focusAuthPanel("signup")}
+              >
+                Create account
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => focusAuthPanel("login")}
+              >
+                Sign in
+              </button>
+            </div>
+
+            <div className="auth__stats" role="list" aria-label="Platform highlights">
+              <article className="auth__stat" role="listitem">
+                <strong>Bilingual support</strong>
+                <span>Plain Urdu and English legal assistance</span>
+              </article>
+              <article className="auth__stat" role="listitem">
+                <strong>AI risk engine</strong>
+                <span>Flag risky clauses and compliance issues early</span>
+              </article>
+              <article className="auth__stat" role="listitem">
+                <strong>Human fallback</strong>
+                <span>Expert referral for high-stakes situations</span>
+              </article>
+            </div>
+
+            <div className="auth__feature-grid" role="list" aria-label="Feature list">
+              <article className="auth__feature" role="listitem">
+                <h3>Contract Risk Detection</h3>
+                <p>Surface risky clauses before signature day.</p>
+              </article>
+              <article className="auth__feature" role="listitem">
+                <h3>Document Generation</h3>
+                <p>Generate practical legal drafts quickly with structured inputs.</p>
+              </article>
+              <article className="auth__feature" role="listitem">
+                <h3>Bilingual Legal Chat</h3>
+                <p>Ask legal questions naturally and get context-aware answers.</p>
+              </article>
+            </div>
+          </section>
+
+          <div className="auth__panel" ref={authPanelRef}>
+            <div className="auth__panel-head">
+              <h3>{authView === "login" ? "Welcome back" : "Create your workspace"}</h3>
+              <p>{authView === "login" ? "Sign in to continue your legal workflow." : "Set up your account and start in under a minute."}</p>
+            </div>
+            <div className="auth__tabs">
+              <button
+                type="button"
+                className={authView === "login" ? "tab is-active" : "tab"}
+                onClick={() => setAuthView("login")}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                className={authView === "signup" ? "tab is-active" : "tab"}
+                onClick={() => setAuthView("signup")}
+              >
+                Create account
+              </button>
+            </div>
+            <form className="auth__form" onSubmit={handleAuthSubmit}>
+              {authView === "signup" && (
+                <label>
+                  Full name
+                  <input
+                    type="text"
+                    value={authForm.name}
+                    onChange={(event) => setAuthForm((prev) => ({ ...prev, name: event.target.value }))}
+                    required
+                  />
+                </label>
+              )}
               <label>
-                Full name
+                Email
                 <input
-                  type="text"
-                  value={authForm.name}
-                  onChange={(event) => setAuthForm((prev) => ({ ...prev, name: event.target.value }))}
+                  type="email"
+                  value={authForm.email}
+                  onChange={(event) => setAuthForm((prev) => ({ ...prev, email: event.target.value }))}
                   required
                 />
               </label>
-            )}
-            <label>
-              Email
-              <input
-                type="email"
-                value={authForm.email}
-                onChange={(event) => setAuthForm((prev) => ({ ...prev, email: event.target.value }))}
-                required
-              />
-            </label>
-            <label>
-              Password
-              <div className="input-with-action">
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={authForm.password}
-                  onChange={(event) => setAuthForm((prev) => ({ ...prev, password: event.target.value }))}
-                  required
-                />
-                <button
-                  type="button"
-                  className="password-toggle"
-                  onClick={() => setShowPassword((prev) => !prev)}
-                >
-                  {showPassword ? "Hide" : "Show"}
-                </button>
-              </div>
-            </label>
-            {authError && <p className="error">{authError}</p>}
-            <button type="submit" className="btn btn-primary">
-              {authView === "login" ? "Sign in" : "Create account"}
-            </button>
-          </form>
+              <label>
+                Password
+                <div className="input-with-action">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={authForm.password}
+                    onChange={(event) => setAuthForm((prev) => ({ ...prev, password: event.target.value }))}
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                  >
+                    {showPassword ? "Hide" : "Show"}
+                  </button>
+                </div>
+              </label>
+              {authError && <p className="error">{authError}</p>}
+              <button type="submit" className="btn btn-primary">
+                {authView === "login" ? "Sign in" : "Create account"}
+              </button>
+            </form>
+          </div>
         </div>
+
+        <section className="auth__momentum" aria-label="Founder momentum">
+          <article className="auth__momentum-card">
+            <span>01</span>
+            <h3>Reduce legal ambiguity before it slows execution</h3>
+            <p>
+              Convert confusing legal text into plain guidance your team can act on quickly.
+            </p>
+          </article>
+          <article className="auth__momentum-card">
+            <span>02</span>
+            <h3>Protect cash flow with proactive risk checks</h3>
+            <p>
+              Identify one-sided obligations and compliance gaps before they become expensive disputes.
+            </p>
+          </article>
+          <article className="auth__momentum-card">
+            <span>03</span>
+            <h3>Scale with repeatable legal operations</h3>
+            <p>
+              Standardize drafting, review, and summary workflows as your business grows.
+            </p>
+          </article>
+        </section>
+
+        <section className="auth__catalog" aria-label="LegalEase feature catalog">
+          <div className="auth__catalog-head">
+            <span>Product capabilities</span>
+            <h3>8 Core Features Built for LegalEase Users</h3>
+          </div>
+          <div className="auth__catalog-grid" role="list">
+            <article className="auth__catalog-item" role="listitem"><strong>1.</strong><p>AI legal chat with context-aware responses</p></article>
+            <article className="auth__catalog-item" role="listitem"><strong>2.</strong><p>Contract risk detection and clause analysis</p></article>
+            <article className="auth__catalog-item" role="listitem"><strong>3.</strong><p>Document summarization in plain language</p></article>
+            <article className="auth__catalog-item" role="listitem"><strong>4.</strong><p>Bilingual output in Urdu and English</p></article>
+            <article className="auth__catalog-item" role="listitem"><strong>5.</strong><p>Template-based legal document generation</p></article>
+            <article className="auth__catalog-item" role="listitem"><strong>6.</strong><p>PDF rendering with editable document draft flow</p></article>
+            <article className="auth__catalog-item" role="listitem"><strong>7.</strong><p>Voice query and transcription-assisted input</p></article>
+            <article className="auth__catalog-item" role="listitem"><strong>8.</strong><p>Conditional referral to verified legal experts</p></article>
+          </div>
+        </section>
+
+        <section className="auth__closing" aria-label="Call to action">
+          <h3>Legal clarity should not be a luxury. It should be infrastructure.</h3>
+          <p>
+            Use LegalEase to understand, draft, and review with confidence and escalate to experts only when needed.
+          </p>
+          <div className="auth__hero-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => focusAuthPanel("signup")}
+            >
+              Start now
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => focusAuthPanel("login")}
+            >
+              I already have an account
+            </button>
+          </div>
+        </section>
       </div>
     );
   }
@@ -1322,111 +1569,190 @@ export default function App() {
     <div className="shell">
       <aside className="sidebar">
         <div className="sidebar__top">
-          <button type="button" className="btn btn-secondary" onClick={startNewChat}>
-            New chat
-          </button>
-          <button type="button" className="btn btn-primary" onClick={() => openReviewModal("summary")}>
-            Summarize Document
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => {
-              setGeneratorView((prev) => !prev);
-              setRiskView(false);
-            }}
-          >
-            {generatorView ? "Back to chat" : "Generate Document"}
-          </button>
-          <button
-            type="button"
-            className="btn btn-tertiary"
-            onClick={() => {
-              setRiskView((prev) => !prev);
-              setGeneratorView(false);
-              setReviewError("");
-            }}
-          >
-            {riskView ? "Back to chat" : "Risk Analyzer"}
-          </button>
-        </div>
+  <span className="sidebar__heading sidebar__heading--section">
+    Quick actions
+  </span>
+
+  <div className="sidebar__actions">
+
+    <button
+      type="button"
+      className="btn btn-primary"
+      onClick={startNewChat}
+    >
+      New chat
+    </button>
+
+    <button
+      type="button"
+      className="btn btn-secondary"
+      onClick={() => openReviewModal("summary")}
+    >
+      Summarize document
+    </button>
+
+    <button
+      type="button"
+      className="btn btn-secondary"
+      onClick={() => {
+        setGeneratorView((prev) => !prev);
+        setRiskView(false);
+      }}
+    >
+      {generatorView ? "Back to chat" : "Generate document"}
+    </button>
+
+    <button
+      type="button"
+      className="btn btn-secondary"
+      onClick={() => {
+        setRiskView((prev) => !prev);
+        setGeneratorView(false);
+        setReviewError("");
+      }}
+    >
+      {riskView ? "Back to chat" : "Risk analyzer"}
+    </button>
+
+  </div>
+</div>
         {generatorView && (
           <details className="sidebar__section sidebar__section--documents" open>
             <summary className="sidebar__heading sidebar__heading--accordion">Documents</summary>
-            <ul className="document-list">
-              {generatedDocs.map((doc) => (
-                <li key={doc.id}>
-                  <button
-                    type="button"
-                    className="document-item"
-                    onClick={() => handleOpenDocumentBadge(doc)}
-                  >
-                    <span className="document-item__label">Draft ready</span>
-                    <span className="document-item__title">{doc.title}</span>
-                  </button>
-                </li>
-              ))}
-              {!generatedDocs.length && <li className="document-list__empty">No documents yet.</li>}
-            </ul>
+            <div className="chat-list__scroll">
+              <ul className="document-list">
+                {generatedDocs.map((doc) => (
+                  <li key={doc.id}>
+                    <div className="chat-list__row">
+                      <button
+                        type="button"
+                        className="document-item review-item"
+                        onClick={() => handleOpenDocumentBadge(doc)}
+                      >
+                        <span className="document-item__label">Draft ready</span>
+                        <span className="document-item__title">{doc.title}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="chat-delete review-delete"
+                        onClick={() => handleDeleteDocumentBadge(doc.id)}
+                        aria-label={`Delete document ${doc.title}`}
+                        title="Delete document"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12M10 11v6M14 11v6"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.6"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+                ))}
+                {!generatedDocs.length && <li className="document-list__empty">No documents yet.</li>}
+              </ul>
+            </div>
           </details>
         )}
         {riskView && (
           <details className="sidebar__section sidebar__section--reviews" open>
             <summary className="sidebar__heading sidebar__heading--accordion">Reviews</summary>
-            <ul className="document-list">
-              {reviewHistory.map((item) => (
-                <li key={item.id}>
-                  <div className="document-item is-static">
-                    <span className="document-item__label">Reviewed</span>
-                    <span className="document-item__title">{item.name}</span>
-                    <span className="chat-list__time">{formatTimestamp(item.created_at)}</span>
-                  </div>
-                </li>
-              ))}
-              {!reviewHistory.length && <li className="document-list__empty">No reviews yet.</li>}
-            </ul>
+            <div className="chat-list__scroll">
+              <ul className="document-list">
+                {reviewHistory.map((item) => (
+                  <li key={item.id}>
+                    <div className="chat-list__row">
+                      <button
+                        type="button"
+                        className="document-item review-item"
+                        onClick={async () => {
+                          if (!item.chat_id) {
+                            setReviewError("This review is not linked to a chat yet.");
+                            return;
+                          }
+                          try {
+                            await selectChat(item.chat_id);
+                          } catch (err) {
+                            setError(err.message || "Unable to open this review chat.");
+                          }
+                        }}
+                      >
+                        <span className="document-item__label">Reviewed</span>
+                        <span className="document-item__title">{item.name}</span>
+                        <span className="chat-list__time">{formatTimestamp(item.created_at)}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="chat-delete review-delete"
+                        onClick={() => handleDeleteReview(item.id)}
+                        aria-label={`Delete review ${item.name}`}
+                        title="Delete review"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12M10 11v6M14 11v6"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.6"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+                ))}
+                {!reviewHistory.length && <li className="document-list__empty">No reviews yet.</li>}
+              </ul>
+            </div>
           </details>
         )}
-        <details className="sidebar__section sidebar__section--chats" open={!generatorView && !riskView}>
-          <summary className="sidebar__heading sidebar__heading--accordion">Chats</summary>
-          <div className="chat-list__scroll">
-            <ul className="chat-list">
-              {chats.map((chat) => (
-                <li key={chat.id}>
-                  <div className="chat-list__row">
-                    <button
-                      type="button"
-                      className={activeChatId === chat.id ? "chat-list__item is-active" : "chat-list__item"}
-                      onClick={() => selectChat(chat.id)}
-                    >
-                      <span className="chat-list__title">{truncateTitle(chat.title)}</span>
-                      <span className="chat-list__time">{formatTimestamp(chat.updated_at)}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="chat-delete"
-                      onClick={() => handleDeleteChat(chat.id)}
-                      aria-label={`Delete ${chat.title}`}
-                      title="Delete chat"
-                    >
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path
-                          d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12M10 11v6M14 11v6"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.6"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </button>
-                  </div>
-                </li>
-              ))}
-              {!chats.length && <li className="chat-list__empty">No chats yet.</li>}
-            </ul>
-          </div>
-        </details>
+        {!generatorView && !riskView && (
+          <details className="sidebar__section sidebar__section--chats" open>
+            <summary className="sidebar__heading sidebar__heading--accordion">Chats</summary>
+            <div className="chat-list__scroll">
+              <ul className="chat-list">
+                {chats.map((chat) => (
+                  <li key={chat.id}>
+                    <div className="chat-list__row">
+                      <button
+                        type="button"
+                        className={activeChatId === chat.id ? "chat-list__item is-active" : "chat-list__item"}
+                        onClick={() => selectChat(chat.id)}
+                      >
+                        <span className="chat-list__title">{truncateTitle(chat.title)}</span>
+                        <span className="chat-list__time">{formatTimestamp(chat.updated_at)}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="chat-delete"
+                        onClick={() => handleDeleteChat(chat.id)}
+                        aria-label={`Delete ${chat.title}`}
+                        title="Delete chat"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12M10 11v6M14 11v6"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.6"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+                ))}
+                {!chats.length && <li className="chat-list__empty">No chats yet.</li>}
+              </ul>
+            </div>
+          </details>
+        )}
         <div className="sidebar__bottom">
           <div className="user-card">
             <div className="user-card__header">
@@ -1554,7 +1880,7 @@ export default function App() {
                             className="btn btn-secondary"
                             onClick={() => setShowEditor(false)}
                           >
-                            Edit form
+                            Back to document generator
                           </button>
                         </div>
                         <div className="generator__toolbar">

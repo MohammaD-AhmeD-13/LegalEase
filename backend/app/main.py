@@ -1,5 +1,6 @@
 from threading import Thread
 import base64
+import json
 import logging
 import os
 import re
@@ -231,6 +232,7 @@ class MessageResponse(BaseModel):
     content: str
     language: Optional[str]
     created_at: datetime
+    referral: Optional[Dict[str, str]] = None
 
 
 class TranslatedMessageResponse(BaseModel):
@@ -240,6 +242,7 @@ class TranslatedMessageResponse(BaseModel):
     language: Optional[str]
     created_at: datetime
     translated_content: Optional[str] = None
+    referral: Optional[Dict[str, str]] = None
 
 
 class ChatResponse(BaseModel):
@@ -422,6 +425,37 @@ def _format_review_message(filename: str, review: DocumentReviewResponse) -> str
     return "\n".join(lines)
 
 
+_REFERRAL_BLOCK_PATTERN = re.compile(
+    r"\n\n<!--REFERRAL:(?P<payload>.*?)-->",
+    re.DOTALL,
+)
+
+
+def _embed_referral_payload(content: str, referral: Dict[str, str]) -> str:
+    payload = json.dumps(referral or {}, ensure_ascii=False)
+    return f"{(content or '').rstrip()}\n\n<!--REFERRAL:{payload}-->"
+
+
+def _extract_referral_payload(content: str) -> tuple[str, Optional[Dict[str, str]]]:
+    text = content or ""
+    match = _REFERRAL_BLOCK_PATTERN.search(text)
+    if not match:
+        return text, None
+
+    payload_raw = (match.group("payload") or "").strip()
+    referral = None
+    if payload_raw:
+        try:
+            parsed = json.loads(payload_raw)
+            if isinstance(parsed, dict):
+                referral = {str(key): str(value) for key, value in parsed.items()}
+        except Exception:
+            referral = None
+
+    cleaned = _REFERRAL_BLOCK_PATTERN.sub("", text).rstrip()
+    return cleaned, referral
+
+
 def _validate_upload(filename: str) -> None:
     if not filename:
         raise HTTPException(status_code=400, detail="File name is missing")
@@ -555,23 +589,31 @@ def _serialize_chat(chat: Chat) -> ChatResponse:
 
 
 def _serialize_message(message: Message) -> MessageResponse:
+    content, referral = _extract_referral_payload(message.content)
     return MessageResponse(
         id=message.id,
         role=message.role,
-        content=message.content,
+        content=content,
         language=message.language,
         created_at=message.created_at,
+        referral=referral if message.role == "assistant" else None,
     )
 
 
-def _serialize_translated_message(message: Message, translated_content: Optional[str]) -> TranslatedMessageResponse:
+def _serialize_translated_message(
+    message: Message,
+    translated_content: Optional[str],
+    referral: Optional[Dict[str, str]] = None,
+) -> TranslatedMessageResponse:
+    content, extracted_referral = _extract_referral_payload(message.content)
     return TranslatedMessageResponse(
         id=message.id,
         role=message.role,
-        content=message.content,
+        content=content,
         language=message.language,
         created_at=message.created_at,
         translated_content=translated_content,
+        referral=referral or extracted_referral if message.role == "assistant" else None,
     )
 
 
@@ -859,6 +901,24 @@ def list_document_badges(current_user: User = Depends(get_current_user), db: Ses
     return [_serialize_document_badge(badge) for badge in badges]
 
 
+@app.delete("/documents/badges/{badge_id}")
+def delete_document_badge(
+    badge_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    badge = (
+        db.query(DocumentBadge)
+        .filter(DocumentBadge.id == badge_id, DocumentBadge.user_id == current_user.id)
+        .first()
+    )
+    if badge is None:
+        raise HTTPException(status_code=404, detail="Document badge not found")
+    db.delete(badge)
+    db.commit()
+    return {"status": "deleted"}
+
+
 @app.post("/documents/generate", response_model=DocumentGenerateResponse)
 async def generate_document(
     request: DocumentGenerateRequest,
@@ -1020,21 +1080,22 @@ def translate_chat_messages(
     )
     translated_messages = []
     for message in messages:
+        content, referral = _extract_referral_payload(message.content)
         translated_content = None
         if message.role == "assistant":
             if target == "ur":
-                if _contains_urdu(message.content):
-                    translated_content = message.content
+                if _contains_urdu(content):
+                    translated_content = content
                 else:
-                    candidate = translate_text(message.content, "en", "ur")
+                    candidate = translate_text(content, "en", "ur")
                     translated_content = candidate if _contains_urdu(candidate) else None
             else:
-                if not _contains_urdu(message.content):
-                    translated_content = message.content
+                if not _contains_urdu(content):
+                    translated_content = content
                 else:
-                    candidate = translate_text(message.content, "auto", "en")
+                    candidate = translate_text(content, "auto", "en")
                     translated_content = None if _contains_urdu(candidate) else candidate
-        translated_messages.append(_serialize_translated_message(message, translated_content))
+        translated_messages.append(_serialize_translated_message(message, translated_content, referral))
     return {
         "chat": _serialize_chat(chat),
         "messages": translated_messages,
@@ -1142,6 +1203,9 @@ async def rag_answer(
             else:
                 answer = f"{intro_line}\n\n{answer.strip()}"
         if chat is not None:
+            persisted_answer = answer
+            if needs_referral and referral_expert:
+                persisted_answer = _embed_referral_payload(answer, referral_expert)
             user_message = Message(
                 chat_id=chat.id,
                 role="user",
@@ -1151,7 +1215,7 @@ async def rag_answer(
             assistant_message = Message(
                 chat_id=chat.id,
                 role="assistant",
-                content=answer,
+                content=persisted_answer,
                 language=request.language,
             )
             if chat.title == "New chat":
